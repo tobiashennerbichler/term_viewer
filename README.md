@@ -1,1 +1,1 @@
-# term_viewer
+Rust terminal viewer
