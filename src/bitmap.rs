@@ -1,12 +1,98 @@
 pub mod bitmap {
+    use core::slice;
     use std::{fs::File, io::Read};
+    use std::io::{BufReader, BufRead};
     use std::io::Error;
+    use crate::common::common::{slice_to_usize_le, read_u16, read_u32};
+    use std::fmt;
 
     const BITMAP_FILE_HEADER_LEN: usize = 14;
     //const BITMAP_DIB_HEADER_LEN: usize = 10;
+    
+    struct FileHeader {
+        bfType: [u8; 2],
+        bfSize: u32,
+        bfReserved: u32,
+        bfOffBits: u32
+    }
+    
+    impl FileHeader {
+        fn from_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+            let mut bfType = [0; 2];
+            reader.read_exact(&mut bfType)?;
+            let bfSize = read_u32(reader)?;
+            let bfReserved = read_u32(reader)?;
+            let bfOffBits = read_u32(reader)?;
+
+            Ok(FileHeader {
+                bfType,
+                bfSize,
+                bfReserved,
+                bfOffBits
+            })
+        }
+    }
+
+    impl fmt::Display for FileHeader {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "FILEHEADER:\n\ttype: {:?}\n\tfilesize: {}\n\toffset: {}", self.bfType, self.bfSize, self.bfOffBits)
+        }
+    }
+
+    struct InfoHeader {
+        biSize: u32,
+        biWidth: i32,
+        biHeight: i32,
+        biPlanes: u16,
+        biBitCount: u16,
+        biCompression: u32,
+        biSizeImage: u32,
+        biXPelsPerMeter: i32,
+        biYPelsPerMeter: i32,
+        biClrUsed: u32,
+        biClrImportant: u32
+    }
+    
+    impl InfoHeader {
+        fn from_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+            let biSize = read_u32(reader)?;
+            let biWidth = read_u32(reader)? as i32;
+            let biHeight = read_u32(reader)? as i32;
+            let biPlanes = read_u16(reader)?;
+            let biBitCount = read_u16(reader)?;
+            let biCompression = read_u32(reader)?;
+            let biSizeImage = read_u32(reader)?;
+            let biXPelsPerMeter = read_u32(reader)? as i32;
+            let biYPelsPerMeter = read_u32(reader)? as i32;
+            let biClrUsed = read_u32(reader)?;
+            let biClrImportant = read_u32(reader)?;
+
+            Ok(InfoHeader {
+                biSize,
+                biWidth,
+                biHeight,
+                biPlanes,
+                biBitCount,
+                biCompression,
+                biSizeImage,
+                biXPelsPerMeter,
+                biYPelsPerMeter,
+                biClrUsed,
+                biClrImportant
+            })
+        }
+    }
+
+    impl fmt::Display for InfoHeader {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "INFOHEADER:\n\tinfoheader size: {}\n\twidth: {}\n\theight: {}\n\tdepth: {}\n\tcompression: {}\n\timagesize: {} \
+            \n\tclrused: {}\n\tclrimportant: {}", self.biSize, self.biWidth, self.biHeight, self.biBitCount, self.biCompression,
+            self.biSizeImage, self.biClrUsed, self.biClrImportant)
+        }
+    }
 
     #[derive(Copy, Clone)]
-    struct Color {
+    pub struct Color {
         red: u8,
         green: u8,
         blue: u8
@@ -15,6 +101,18 @@ pub mod bitmap {
     impl Into<String> for Color {
         fn into(self) -> String {
             format!("{};{};{}", self.red, self.green, self.blue)
+        }
+    }
+
+    impl TryFrom<&[u8]> for Color {
+        type Error = &'static str;
+
+        fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+            if value.len() != 3 {
+                return Err("Slice too long");
+            }
+
+            Ok(Color {red: value[2], green: value[1], blue: value[0]})
         }
     }
     
@@ -26,65 +124,65 @@ pub mod bitmap {
     }
 
     pub struct Bitmap {
-        width: usize,
-        height: usize,
-        pixels: Vec<Color>
+        pub width: usize,
+        pub height: usize,
+        pub pixels: Vec<Vec<Color>>
     }
     
     impl Bitmap {
         pub fn new(filename: &str) -> std::io::Result<Self> {
-            let mut file = File::open(filename)?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)?;
+            let file = File::open(filename)?;
+            let mut reader = BufReader::new(file);
 
-            Ok(Bitmap {width: 0, height: 0, pixels: Vec::new()})
-        }
-    }
-
-    enum Endianess {
-        Little,
-        Big
-    }
-
-    fn slice_to_usize(bytes: &[u8], endianess: Endianess) -> std::io::Result<usize> {
-        if bytes.len() > 8 {
-            return Err(Error::other("Bytes length must be <= 8"));
-        }
-
-        let mut usize = 0;
-        match endianess {
-            Endianess::Little => {
-                for (i, &byte) in bytes.iter().enumerate() {
-                    println!("byte: 0x{byte:0x} at {i}");
-                    usize += (byte as usize) << i*8;
-                }
-            },
-            Endianess::Big => {
-                for (i, &byte) in bytes.iter().rev().enumerate() {
-                    usize += (byte as usize) << i*8;
-                }
+            let file_header = FileHeader::from_reader(&mut reader)?;
+            if &file_header.bfType != b"BM" {
+                return Err(Error::other("File does not start with Bitmap magic values"));
             }
-        }
+            if file_header.bfOffBits < 54 {
+                return Err(Error::other("Offset too small"));
+            }
 
-        Ok(usize)
-    }
+            let info_header = InfoHeader::from_reader(&mut reader)?;
+            if info_header.biBitCount != 24 {
+                return Err(Error::other("Bitdepth other than 24 not supported right now"));
+            }
+            if info_header.biCompression != 0 {
+                return Err(Error::other("Compressed Bitmap files not supported right now"));
+            }
 
-    pub fn parse_bitmap_header(bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() < BITMAP_FILE_HEADER_LEN {
-            return Err(Error::other("File does not contain BITMAP header"));
+            // Consume possible bytes until pixel table starts
+            let bytes_till_offset = (file_header.bfOffBits - 54) as usize;
+            reader.consume(bytes_till_offset);
+
+            println!("{file_header}");
+            println!("{info_header}");
+            let mut ranks = Vec::new();
+
+            let height = info_header.biHeight.abs() as usize;
+            let width = info_header.biWidth as usize;
+            let num_align_bytes = (width*3) % 4;
+
+            for y in 0..height {
+                let mut colors = Vec::new();
+                for x in 0..width {
+                    let mut rgb: [u8; 3] = [0; 3];
+                    if let Err(err) = reader.read_exact(&mut rgb) {
+                        println!("Could not read 3 bytes: {err}");
+                        return Err(err);
+                    }
+
+                    colors.push(Color::try_from(&rgb[..]).unwrap());
+                }
+                ranks.push(colors);
+                reader.consume(num_align_bytes);
+            }
+
+            // Translate from bottom-up to top-down
+            if info_header.biHeight > 0 {
+                ranks.reverse();
+            }
+
+            Ok(Bitmap {width, height, pixels: ranks})
         }
-        
-        if b"BM" != &bytes[..2] {
-            return Err(Error::other("File does not contain BITMAP magic values"));
-        }
-        
-        let len = slice_to_usize(&bytes[2..6], Endianess::Little).unwrap();
-        if len != bytes.len() {
-            println!("read len: {len}, file len: {}", bytes.len());
-            return Err(Error::other("File indicates wrong file size"));
-        }
-        
-        let offset = slice_to_usize(&bytes[10..14], Endianess::Little).unwrap();
-        Ok(offset)
     }
 }

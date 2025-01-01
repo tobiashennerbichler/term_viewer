@@ -1,9 +1,10 @@
 mod bitmap;
+mod common;
 
 use std::io::Error;
 use std::env;
 
-use bitmap::bitmap::{Bitmap, parse_bitmap_header};
+use bitmap::bitmap::Bitmap;
 
 fn main() -> std::io::Result<()> {
     let term_size = termsize::get().expect("Should not fail");
@@ -13,7 +14,13 @@ fn main() -> std::io::Result<()> {
         return Err(Error::other("Usage: cargo run -- [filename]"));
     }
     
-    parse_bitmap_header(b"BM6\xEB\x41\x00\x00\x00\x00\x006\x00\x00\x00\x28\x00\x00\x00\xB0\x04")?;
+    let bitmap = Bitmap::new(&args[1])?;
+    for y in 0..bitmap.height {
+        for x in 0..bitmap.width {
+            bitmap.pixels[y][x].print();
+        }
+        println!("");
+    }
     
     Ok(())
 }
