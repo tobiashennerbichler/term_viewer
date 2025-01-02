@@ -156,33 +156,55 @@ pub mod bitmap {
 
             println!("{file_header}");
             println!("{info_header}");
-            let mut ranks = Vec::new();
-
             let height = info_header.biHeight.abs() as usize;
             let width = info_header.biWidth as usize;
-            let num_align_bytes = (width*3) % 4;
-
-            for y in 0..height {
-                let mut colors = Vec::new();
-                for x in 0..width {
-                    let mut rgb: [u8; 3] = [0; 3];
-                    if let Err(err) = reader.read_exact(&mut rgb) {
-                        println!("Could not read 3 bytes: {err}");
-                        return Err(err);
-                    }
-
-                    colors.push(Color::try_from(&rgb[..]).unwrap());
-                }
-                ranks.push(colors);
-                reader.consume(num_align_bytes);
-            }
-
-            // Translate from bottom-up to top-down
+            let mut pixels = read_pixels(&mut reader, height, width)?;
+            
             if info_header.biHeight > 0 {
-                ranks.reverse();
+                pixels.reverse();
             }
 
-            Ok(Bitmap {width, height, pixels: ranks})
+            Ok(Bitmap {width, height, pixels})
         }
+        
+        pub fn print(&self, term_height: usize, term_width: usize) {
+            println!("\x1b[2J");
+            let y_step = std::cmp::max(self.height / term_height, 1);
+            let x_step = std::cmp::max(self.width / term_width, 1);
+            println!("y_step: {y_step}, x_step: {x_step}");
+            
+            let mut y = 0;
+            while y < self.height {
+                let mut x = 0;
+                while x < self.width {
+                    self.pixels[y][x].print();
+                    x += x_step;
+                }
+                println!("");
+                y += y_step;
+            }
+        }
+    }
+
+    fn read_pixels(reader: &mut BufReader<File>, height: usize, width: usize) -> std::io::Result<Vec<Vec<Color>>> {
+        let mut pixels = Vec::new();
+        let num_align_bytes = (width*3) % 4;
+
+        for y in 0..height {
+            let mut line = Vec::new();
+            for x in 0..width {
+                let mut rgb: [u8; 3] = [0; 3];
+                if let Err(err) = reader.read_exact(&mut rgb) {
+                    println!("Could not read 3 bytes: {err}");
+                    return Err(err);
+                }
+
+                line.push(Color::try_from(&rgb[..]).unwrap());
+            }
+            pixels.push(line);
+            reader.consume(num_align_bytes);
+        }
+
+        Ok(pixels)
     }
 }

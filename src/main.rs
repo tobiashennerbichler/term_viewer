@@ -8,6 +8,9 @@ use bitmap::bitmap::Bitmap;
 
 fn main() -> std::io::Result<()> {
     let term_size = termsize::get().expect("Should not fail");
+    let term_height = term_size.rows as usize;
+    let term_width = term_size.cols as usize;
+    println!("height: {term_height}, width: {term_width}");
     
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -15,12 +18,7 @@ fn main() -> std::io::Result<()> {
     }
     
     let bitmap = Bitmap::new(&args[1])?;
-    for y in 0..bitmap.height {
-        for x in 0..bitmap.width {
-            bitmap.pixels[y][x].print();
-        }
-        println!("");
-    }
+    bitmap.print(term_height, term_width);
     
     Ok(())
 }
