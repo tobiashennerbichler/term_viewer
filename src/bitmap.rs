@@ -160,16 +160,20 @@ pub mod bitmap {
         pub fn print(&self, term_height: usize, term_width: usize) {
             erase_in_display(Erase::SCREEN); 
             set_cursor_pos(Position {x: 1, y: 1});
-            let y_step = std::cmp::max(self.height / term_height, 1);
-            let x_step = std::cmp::max(self.width / term_width, 1);
-            let height = std::cmp::min(self.height, term_height);
-            let width = std::cmp::min(self.width, term_width);
+            let add_y = if self.height % term_height == 0 { 0 } else { 1 };
+            let add_x = if self.width % term_width == 0 { 0 } else { 1 };
+            let y_step = self.height / term_height + add_y;
+            let x_step = self.width / term_width + add_x;
             
-            for y in 0..height {
-                for x in 0..width {
-                    self.pixels[y*y_step][x*x_step].print();
+            let mut y = 0;
+            while y < self.height {
+                let mut x = 0;
+                while x < self.width {
+                    self.pixels[y][x].print();
+                    x += x_step;
                 }
                 println!("");
+                y += y_step;
             }
         }
     }
