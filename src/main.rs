@@ -1,5 +1,6 @@
 mod bitmap;
 mod common;
+mod ansi;
 
 use std::io::Error;
 use std::env;
@@ -19,6 +20,6 @@ fn main() -> std::io::Result<()> {
     
     let bitmap = Bitmap::new(&args[1])?;
     bitmap.print(term_height, term_width);
-    
+
     Ok(())
 }

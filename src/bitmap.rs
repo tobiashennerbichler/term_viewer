@@ -1,14 +1,12 @@
 pub mod bitmap {
-    use core::slice;
     use std::{fs::File, io::Read};
     use std::io::{BufReader, BufRead};
     use std::io::Error;
-    use crate::common::common::{slice_to_usize_le, read_u16, read_u32};
     use std::fmt;
-
-    const BITMAP_FILE_HEADER_LEN: usize = 14;
-    //const BITMAP_DIB_HEADER_LEN: usize = 10;
     
+    use crate::common::common::{read_u16, read_u32};
+    use crate::ansi::ansi::{erase_in_display, set_foreground_color, Erase, set_cursor_pos, Position};
+
     struct FileHeader {
         bfType: [u8; 2],
         bfSize: u32,
@@ -98,12 +96,6 @@ pub mod bitmap {
         blue: u8
     }
 
-    impl Into<String> for Color {
-        fn into(self) -> String {
-            format!("{};{};{}", self.red, self.green, self.blue)
-        }
-    }
-
     impl TryFrom<&[u8]> for Color {
         type Error = &'static str;
 
@@ -117,9 +109,12 @@ pub mod bitmap {
     }
     
     impl Color {
-        pub fn print(self) {    
-            let s: String = self.into();
-            print!("\x1b[38;2;{}m█\x1b[m", s);
+        pub fn print(&self) {
+            set_foreground_color('█', self.to_string());
+        }
+
+        fn to_string(&self) -> String {
+            format!("{};{};{}", self.red, self.green, self.blue)
         }
     }
 
@@ -168,20 +163,18 @@ pub mod bitmap {
         }
         
         pub fn print(&self, term_height: usize, term_width: usize) {
-            println!("\x1b[2J");
+            erase_in_display(Erase::SCREEN); 
+            set_cursor_pos(Position {x: 1, y: 1});
             let y_step = std::cmp::max(self.height / term_height, 1);
             let x_step = std::cmp::max(self.width / term_width, 1);
-            println!("y_step: {y_step}, x_step: {x_step}");
+            let height = std::cmp::min(self.height, term_height);
+            let width = std::cmp::min(self.width, term_width);
             
-            let mut y = 0;
-            while y < self.height {
-                let mut x = 0;
-                while x < self.width {
-                    self.pixels[y][x].print();
-                    x += x_step;
+            for y in 0..height {
+                for x in 0..width {
+                    self.pixels[y*y_step][x*x_step].print();
                 }
                 println!("");
-                y += y_step;
             }
         }
     }
