@@ -96,15 +96,9 @@ pub mod bitmap {
         blue: u8
     }
 
-    impl TryFrom<&[u8]> for Color {
-        type Error = &'static str;
-
-        fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-            if value.len() != 3 {
-                return Err("Slice too long");
-            }
-
-            Ok(Color {red: value[2], green: value[1], blue: value[0]})
+    impl From<&[u8; 3]> for Color {
+        fn from(value: &[u8; 3]) -> Self {
+            Color {red: value[2], green: value[1], blue: value[0]}
         }
     }
     
@@ -139,6 +133,7 @@ pub mod bitmap {
 
             let info_header = InfoHeader::from_reader(&mut reader)?;
             if info_header.biBitCount != 24 {
+                println!("{}", info_header.biBitCount);
                 return Err(Error::other("Bitdepth other than 24 not supported right now"));
             }
             if info_header.biCompression != 0 {
@@ -183,16 +178,16 @@ pub mod bitmap {
         let mut pixels = Vec::new();
         let num_align_bytes = (width*3) % 4;
 
-        for y in 0..height {
+        for _ in 0..height {
             let mut line = Vec::new();
-            for x in 0..width {
+            for _ in 0..width {
                 let mut rgb: [u8; 3] = [0; 3];
                 if let Err(err) = reader.read_exact(&mut rgb) {
                     println!("Could not read 3 bytes: {err}");
                     return Err(err);
                 }
 
-                line.push(Color::try_from(&rgb[..]).unwrap());
+                line.push(Color::from(&rgb));
             }
             pixels.push(line);
             reader.consume(num_align_bytes);
