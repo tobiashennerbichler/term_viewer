@@ -1,7 +1,7 @@
 pub mod bitmap {
     use std::{fs::File, io::Read};
     use std::io::{BufReader, BufRead};
-    use std::io::Error;
+    use std::io::{Error, Seek, SeekFrom};
     use std::fmt;
     
     use crate::common::common::{read_u16, read_u32};
@@ -105,16 +105,9 @@ pub mod bitmap {
         }
     }
 
-    impl From<&[u8; 3]> for Color {
-        fn from(value: &[u8; 3]) -> Self {
-            Color {red: value[2], green: value[1], blue: value[0]}
-        }
-    }
-
-    
     impl Color {
-        pub fn print(&self) {
-            set_foreground_color('█', self.to_string());
+        pub fn to_ansi(&self) -> String {
+            set_foreground_color('█', self.to_string())
         }
 
         fn to_string(&self) -> String {
@@ -137,24 +130,40 @@ pub mod bitmap {
             if &file_header.bfType != b"BM" {
                 return Err(Error::other("File does not start with Bitmap magic values"));
             }
-            if file_header.bfOffBits < 54 {
-                return Err(Error::other("Offset too small"));
-            }
 
             let info_header = InfoHeader::from_reader(&mut reader)?;
             if info_header.biCompression != 0 {
                 return Err(Error::other("Compressed Bitmap files not supported right now"));
             }
             
+            let num_colortable_entries = match info_header.biBitCount {
+                0..=8 => {
+                    if info_header.biClrUsed == 0 {
+                        2u32.pow(info_header.biBitCount.into())
+                    } else {
+                        info_header.biClrUsed
+                    }
+                },
+                _ => 0
+            };
+            
+            if file_header.bfOffBits < 54 + num_colortable_entries * 4 {
+                return Err(Error::other("Pixel offset too small"));
+            }
+
+            println!("{file_header}");
+            println!("{info_header}");
+            
             let mut color_table = Vec::new();
-            let bytes_till_offset = file_header.bfOffBits - 54;
-            while bytes_till_offset > 0 {
+            for _ in 0..num_colortable_entries {
                 let argb = read_u32(&mut reader)?;
                 color_table.push(Color::from(argb));
             }
+
+            // Discard remaining bytes until start of pixel data
+            let bytes_till_offset: usize = (file_header.bfOffBits - 54 - num_colortable_entries * 4) as usize;
+            reader.consume(bytes_till_offset);
             
-            println!("{file_header}");
-            println!("{info_header}");
             let height = info_header.biHeight.abs() as usize;
             let width = info_header.biWidth as usize;
             let mut pixels = read_pixels(&mut reader, height, width, info_header.biBitCount, color_table)?;
@@ -169,36 +178,41 @@ pub mod bitmap {
         pub fn print(&self, term_height: usize, term_width: usize) {
             erase_in_display(Erase::SCREEN); 
             set_cursor_pos(Position {x: 1, y: 1});
-            let add_y = if self.height % term_height == 0 { 0 } else { 1 };
-            let add_x = if self.width % term_width == 0 { 0 } else { 1 };
-            let y_step = self.height / term_height + add_y;
-            let x_step = self.width / term_width + add_x;
+            let mut picture = String::new();
+            let y_step: f64 = (self.height as f64) / (term_height as f64);
+            let x_step: f64 = (self.width as f64) / (term_width as f64);
             
-            let mut y = 0;
-            while y < self.height {
-                let mut x = 0;
-                while x < self.width {
-                    self.pixels[y][x].print();
-                    x += x_step;
+            let mut fy: f64 = 0.0;
+            for _ in 0..term_height {
+                let y = fy.floor() as usize;
+                let mut fx: f64 = 0.0;
+                for _ in 0..term_width {
+                    let x = fx.floor() as usize;
+                    fx += x_step;
+                    picture.push_str(&self.pixels[y][x].to_ansi());
                 }
-                println!("");
-                y += y_step;
+                fy += y_step;
+                picture.push('\n');
             }
+
+            print!("{picture}");
         }
     }
 
-    fn read_pixels(reader: &mut BufReader<File>, height: usize, width: usize, bit_per_pixel: u16, color_table: Vec<Color>) -> std::io::Result<Vec<Vec<Color>>> {
+    fn read_pixels(reader: &mut BufReader<File>, height: usize, width: usize, bits_per_pixel: u16, color_table: Vec<Color>) -> std::io::Result<Vec<Vec<Color>>> {
         let mut pixels = Vec::new();
-        let num_align_bytes = (width*3) % 4;
 
-        for _ in 0..height {
+        for y in 0..height {
             let mut line = Vec::new();
-            for _ in 0..width {
-                let res = match bit_per_pixel {
-                    1 => read_1bpp(reader, &color_table),
-                    2 => Err(Error::other("Not implemented yet")),
-                    4 => Err(Error::other("Not implemented yet")),
-                    8 => Err(Error::other("Not implemented yet")),
+            let bytes_per_line = match bits_per_pixel {
+                x @ (1 | 2 | 4 | 8) => ((x as usize) * width)/8,
+                _ => width
+            };
+            let num_align_bytes = if bytes_per_line % 4 == 0 { 0 } else { 4 - (bytes_per_line % 4) };
+
+            for x in 0..bytes_per_line {
+                let res = match bits_per_pixel {
+                    x @ (1 | 2 | 4 | 8) => read_colortable(reader, &color_table, x),
                     16 => Err(Error::other("Not implemented yet")),
                     24 => read_24bpp(reader),
                     32 => Err(Error::other("Not implemented yet")),
@@ -206,7 +220,7 @@ pub mod bitmap {
                 };
 
                 if let Err(err) = res {
-                    println!("Could not read pixel values: {err}");
+                    println!("Could not read pixel values for y {y} and x {x}: {err}");
                     return Err(err);
                 }
 
@@ -219,16 +233,18 @@ pub mod bitmap {
         Ok(pixels)
     }
     
-    fn read_1bpp(reader: &mut BufReader<File>, color_table: &Vec<Color>) -> std::io::Result<Vec<Color>> {
-        if color_table.len() < 2 {
-            return Err(Error::other("Color table not large enough"));
-        }
-
-        let mut byte: [u8; 1] = [0; 1];
-        reader.read_exact(&mut byte)?;
+    fn read_colortable<R: Read>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
+        let mut buf: [u8; 1] = [0; 1];
+        reader.read_exact(&mut buf)?;
         let mut pixels = Vec::new();
-        for i in 0..8 {
-            let index: usize = ((byte[0] as usize) >> (7 - i)) & 1;
+        let start_shift = 8 - bits_per_pixel;
+        let byte = buf[0] as usize;
+        for i in 0..(8/bits_per_pixel) {
+            let index: usize = (byte >> (start_shift - bits_per_pixel*i)) & (2usize.pow(bits_per_pixel as u32) - 1);
+            if index > color_table.len() {
+                return Err(Error::other("Out-of-bounds index"));
+            }
+
             pixels.push(color_table[index]);
         }
 
@@ -238,6 +254,7 @@ pub mod bitmap {
     fn read_24bpp(reader: &mut BufReader<File>) -> std::io::Result<Vec<Color>> {
         let mut rgb: [u8; 3] = [0; 3];
         reader.read_exact(&mut rgb)?;
-        Ok(vec![Color::from(&rgb)])
+        let argb: u32 = (rgb[2] as u32) << 16 | (rgb[1] as u32) << 8 | (rgb[0] as u32);
+        Ok(vec![Color::from(argb)])
     }
 }
