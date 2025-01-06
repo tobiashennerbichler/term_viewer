@@ -8,75 +8,75 @@ pub mod bitmap {
     use crate::ansi::ansi::{erase_in_display, set_foreground_color, Erase, set_cursor_pos, Position};
 
     struct FileHeader {
-        bfType: [u8; 2],
-        bfSize: u32,
-        bfReserved: u32,
-        bfOffBits: u32
+        bf_type: [u8; 2],
+        bf_size: u32,
+        bf_reserved: u32,
+        bf_off_bits: u32
     }
     
     impl FileHeader {
         fn from_reader<R: BufRead>(reader: &mut R) -> std::io::Result<Self> {
-            let mut bfType = [0; 2];
-            reader.read_exact(&mut bfType)?;
-            let bfSize = read_u32(reader)?;
-            let bfReserved = read_u32(reader)?;
-            let bfOffBits = read_u32(reader)?;
+            let mut bf_type = [0; 2];
+            reader.read_exact(&mut bf_type)?;
+            let bf_size = read_u32(reader)?;
+            let bf_reserved = read_u32(reader)?;
+            let bf_off_bits = read_u32(reader)?;
 
             Ok(FileHeader {
-                bfType,
-                bfSize,
-                bfReserved,
-                bfOffBits
+                bf_type,
+                bf_size,
+                bf_reserved,
+                bf_off_bits
             })
         }
     }
 
     impl fmt::Display for FileHeader {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "FILEHEADER:\n\ttype: {:?}\n\tfilesize: {}\n\toffset: {}", self.bfType, self.bfSize, self.bfOffBits)
+            write!(f, "FILEHEADER:\n\ttype: {:?}\n\tfilesize: {}\n\toffset: {}", self.bf_type, self.bf_size, self.bf_off_bits)
         }
     }
 
     struct InfoHeader {
-        biSize: u32,
-        biWidth: i32,
-        biHeight: i32,
-        biPlanes: u16,
-        biBitCount: u16,
-        biCompression: u32,
-        biSizeImage: u32,
-        biXPelsPerMeter: i32,
-        biYPelsPerMeter: i32,
-        biClrUsed: u32,
-        biClrImportant: u32
+        bi_size: u32,
+        bi_width: i32,
+        bi_height: i32,
+        bi_planes: u16,
+        bi_bit_count: u16,
+        bi_compression: u32,
+        bi_size_image: u32,
+        bi_x_pels_per_meter: i32,
+        bi_y_pels_per_meter: i32,
+        bi_clr_used: u32,
+        bi_clr_important: u32
     }
     
     impl InfoHeader {
         fn from_reader<R: BufRead>(reader: &mut R) -> std::io::Result<Self> {
-            let biSize = read_u32(reader)?;
-            let biWidth = read_u32(reader)? as i32;
-            let biHeight = read_u32(reader)? as i32;
-            let biPlanes = read_u16(reader)?;
-            let biBitCount = read_u16(reader)?;
-            let biCompression = read_u32(reader)?;
-            let biSizeImage = read_u32(reader)?;
-            let biXPelsPerMeter = read_u32(reader)? as i32;
-            let biYPelsPerMeter = read_u32(reader)? as i32;
-            let biClrUsed = read_u32(reader)?;
-            let biClrImportant = read_u32(reader)?;
+            let bi_size = read_u32(reader)?;
+            let bi_width = read_u32(reader)? as i32;
+            let bi_height = read_u32(reader)? as i32;
+            let bi_planes = read_u16(reader)?;
+            let bi_bit_count = read_u16(reader)?;
+            let bi_compression = read_u32(reader)?;
+            let bi_size_image = read_u32(reader)?;
+            let bi_x_pels_per_meter = read_u32(reader)? as i32;
+            let bi_y_pels_per_meter = read_u32(reader)? as i32;
+            let bi_clr_used = read_u32(reader)?;
+            let bi_clr_important = read_u32(reader)?;
 
             Ok(InfoHeader {
-                biSize,
-                biWidth,
-                biHeight,
-                biPlanes,
-                biBitCount,
-                biCompression,
-                biSizeImage,
-                biXPelsPerMeter,
-                biYPelsPerMeter,
-                biClrUsed,
-                biClrImportant
+                bi_size,
+                bi_width,
+                bi_height,
+                bi_planes,
+                bi_bit_count,
+                bi_compression,
+                bi_size_image,
+                bi_x_pels_per_meter,
+                bi_y_pels_per_meter,
+                bi_clr_used,
+                bi_clr_important
             })
         }
     }
@@ -84,8 +84,8 @@ pub mod bitmap {
     impl fmt::Display for InfoHeader {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "INFOHEADER:\n\tinfoheader size: {}\n\twidth: {}\n\theight: {}\n\tdepth: {}\n\tcompression: {}\n\timagesize: {} \
-            \n\tclrused: {}\n\tclrimportant: {}", self.biSize, self.biWidth, self.biHeight, self.biBitCount, self.biCompression,
-            self.biSizeImage, self.biClrUsed, self.biClrImportant)
+            \n\tclrused: {}\n\tclrimportant: {}", self.bi_size, self.bi_width, self.bi_height, self.bi_bit_count, self.bi_compression,
+            self.bi_size_image, self.bi_clr_used, self.bi_clr_important)
         }
     }
 
@@ -94,6 +94,12 @@ pub mod bitmap {
         red: u8,
         green: u8,
         blue: u8
+    }
+
+    impl fmt::Debug for Color {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "r/g/b: {}/{}/{}", self.red, self.green, self.blue)
+        }
     }
 
     impl From<u32> for Color {
@@ -127,27 +133,27 @@ pub mod bitmap {
             let mut reader = BufReader::new(file);
 
             let file_header = FileHeader::from_reader(&mut reader)?;
-            if &file_header.bfType != b"BM" {
+            if &file_header.bf_type != b"BM" {
                 return Err(Error::other("File does not start with Bitmap magic values"));
             }
 
             let info_header = InfoHeader::from_reader(&mut reader)?;
-            if info_header.biCompression != 0 {
+            if info_header.bi_compression != 0 {
                 return Err(Error::other("Compressed Bitmap files not supported right now"));
             }
             
-            let num_colortable_entries = match info_header.biBitCount {
+            let num_colortable_entries = match info_header.bi_bit_count {
                 0..=8 => {
-                    if info_header.biClrUsed == 0 {
-                        2u32.pow(info_header.biBitCount.into())
+                    if info_header.bi_clr_used == 0 {
+                        2u32.pow(info_header.bi_bit_count.into())
                     } else {
-                        info_header.biClrUsed
+                        info_header.bi_clr_used
                     }
                 },
                 _ => 0
             };
             
-            if file_header.bfOffBits < 54 + num_colortable_entries * 4 {
+            if file_header.bf_off_bits < 54 + num_colortable_entries * 4 {
                 return Err(Error::other("Pixel offset too small"));
             }
 
@@ -163,16 +169,16 @@ pub mod bitmap {
             }
 
             // Discard remaining bytes until start of pixel data
-            let bytes_till_offset: usize = (file_header.bfOffBits - 54 - num_colortable_entries * 4) as usize;
+            let bytes_till_offset: usize = (file_header.bf_off_bits - 54 - num_colortable_entries * 4) as usize;
             println!("Consume {bytes_till_offset} bytes after color table");
             reader.consume(bytes_till_offset);
             
-            let height = info_header.biHeight.abs() as usize;
-            let width = info_header.biWidth as usize;
+            let height = info_header.bi_height.abs() as usize;
+            let width = info_header.bi_width as usize;
             println!("Start reading pixels from offset: {}", reader.seek(SeekFrom::Current(0)).unwrap());
-            let mut pixels = read_pixels(&mut reader, height, width, info_header.biBitCount, color_table)?;
+            let mut pixels = read_pixels(&mut reader, height, width, info_header.bi_bit_count, color_table)?;
             
-            if info_header.biHeight > 0 {
+            if info_header.bi_height > 0 {
                 pixels.reverse();
             }
 
@@ -207,8 +213,7 @@ pub mod bitmap {
         let mut pixels = Vec::new();
         let (bytes_per_line, reads_per_line) = match bits_per_pixel {
             x @ (1 | 2 | 4 | 8) => (width, ((x as usize) * width)/8),
-            24 => (width*3, width),
-            32 => (width*4, width),
+            x @ (16 | 24 | 32) => (((x as usize) * width)/8, width),
             _ => panic!("Not implemented yet")
         };
         let num_align_bytes = if bytes_per_line % 4 == 0 { 0 } else { 4 - (bytes_per_line % 4) };
@@ -218,8 +223,8 @@ pub mod bitmap {
             let mut line = Vec::new();
             for _ in 0..reads_per_line {
                 let res = match bits_per_pixel {
-                    x @ (1 | 2 | 4 | 8) => read_colortable(reader, &color_table, x),
-                    16 => Err(Error::other("Not implemented yet")),
+                    x @ (1 | 2 | 4 | 8) => read_color_table(reader, &color_table, x),
+                    16 => read_16bpp(reader),
                     24 => read_24bpp(reader),
                     32 => read_32bpp(reader),
                     _ => Err(Error::other("Not a valid bpp value"))
@@ -229,7 +234,7 @@ pub mod bitmap {
                     println!("Could not read pixel values: {err}");
                     return Err(err);
                 }
-
+                
                 line.append(&mut res.unwrap());
             }
             pixels.push(line);
@@ -239,7 +244,7 @@ pub mod bitmap {
         Ok(pixels)
     }
     
-    fn read_colortable<R: BufRead>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
+    fn read_color_table<R: BufRead>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
         let mut buf: [u8; 1] = [0; 1];
         reader.read_exact(&mut buf)?;
         let mut pixels = Vec::new();
@@ -255,6 +260,24 @@ pub mod bitmap {
         }
 
         Ok(pixels)
+    }
+    
+    fn read_16bpp<R: BufRead>(reader: &mut R) -> std::io::Result<Vec<Color>> {
+        let rgb = read_u16(reader)?;
+        // RGB each take 5 bit, MSB is ignored
+        let mut red = ((rgb >> 10) & 0x1F) as u8;
+        let mut green = ((rgb >> 5) & 0x1F) as u8;
+        let mut blue = (rgb & 0x1F) as u8;
+        
+        // Sign extend RGB to 8bit
+        let red_sign = (red >> 4) & 1;
+        let green_sign = (green >> 4) & 1;
+        let blue_sign = (blue >> 4) & 1;
+        red = (red << 3) | 0b111*red_sign;
+        green = (green << 3) | 0b111*green_sign;
+        blue = (blue << 3) | 0b111*blue_sign;
+        
+        Ok(vec!(Color {red, green, blue}))
     }
     
     fn read_24bpp<R: BufRead>(reader: &mut R) -> std::io::Result<Vec<Color>> {
