@@ -1,5 +1,5 @@
 pub mod common {
-    use std::io::Read;
+    use std::io::BufRead;
 
     enum Endianess {
         Little,
@@ -36,13 +36,13 @@ pub mod common {
         slice_to_usize(bytes, Endianess::Big)
     }
 
-    pub fn read_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
+    pub fn read_u32<R: BufRead>(reader: &mut R) -> std::io::Result<u32> {
         let mut buf = [0; 4];
         reader.read_exact(&mut buf)?;
         Ok(slice_to_usize_le(&buf) as u32)
     }
     
-    pub fn read_u16<R: Read>(reader: &mut R) -> std::io::Result<u16> {
+    pub fn read_u16<R: BufRead>(reader: &mut R) -> std::io::Result<u16> {
         let mut buf = [0; 2];
         reader.read_exact(&mut buf)?;
         Ok(slice_to_usize_le(&buf) as u16)
