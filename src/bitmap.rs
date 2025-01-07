@@ -189,14 +189,16 @@ pub mod bitmap {
             erase_in_display(Erase::SCREEN); 
             set_cursor_pos(Position {x: 1, y: 1});
             let mut picture = String::new();
-            let y_step: f64 = (self.height as f64) / (term_height as f64);
-            let x_step: f64 = (self.width as f64) / (term_width as f64);
+            let y_step: f64 = f64::max((self.height as f64) / (term_height as f64), 1.0);
+            let x_step: f64 = f64::max((self.width as f64) / (term_width as f64), 1.0);
+            let height = std::cmp::min(self.height, term_height);
+            let width = std::cmp::min(self.width, term_width);
             
             let mut fy: f64 = 0.0;
-            for _ in 0..term_height {
+            for _ in 0..height {
                 let y = fy.floor() as usize;
                 let mut fx: f64 = 0.0;
-                for _ in 0..term_width {
+                for _ in 0..width {
                     let x = fx.floor() as usize;
                     fx += x_step;
                     picture.push_str(&self.pixels[y][x].to_ansi());
