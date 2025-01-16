@@ -19,8 +19,8 @@ pub mod ansi {
         print!("{CSI}{n}J");
     }
     
-    pub fn set_foreground_color(character: char, color: String) -> String {
-        format!("{CSI}38;2;{color}m{character}{CSI}m")
+    pub fn set_foreground_color(character: char, color: String) {
+        print!("{CSI}38;2;{color}m{character}{CSI}m")
     }
 
     pub struct Position {
