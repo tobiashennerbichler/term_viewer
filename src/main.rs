@@ -5,48 +5,42 @@ mod ansi;
 use std::path::Path;
 use std::io::Error;
 use std::fs::read_dir;
-use std::{env, thread, time};
+use std::{env, thread};
+use std::time::{Duration, Instant};
 
 use bitmap::bitmap::Bitmap;
 
 const MILLIS_PER_FRAME: u64 = 33;
+const DURATION_PER_FRAME: Duration = Duration::from_millis(MILLIS_PER_FRAME);
 
 fn handle_dir(path: &Path, term_height: usize, term_width: usize) -> std::io::Result<()> {
     let entries = read_dir(path)?;
+    let mut prev = None;
     for entry in entries {
+        let start = Instant::now();
         let dir_entry = entry?;
         let entry_path = dir_entry.path();
         let entry_metadata = entry_path.metadata()?;
-
         if !entry_metadata.is_file() {
             continue;
         }
 
-        match handle_file(&entry_path, term_height, term_width) {
-            Ok(_) => thread::sleep(time::Duration::from_millis(MILLIS_PER_FRAME)),
-            Err(err) => {
-                println!("Could not read file {entry_path:?}: {err}");
-                continue;
-            }
+        let curr_bitmap = handle_file(&entry_path, term_height, term_width, prev)?;
+        let end = Instant::now();
+        let time_spent = end.duration_since(start);
+        if let Some(remaining_time) = DURATION_PER_FRAME.checked_sub(time_spent) {
+            thread::sleep(remaining_time);
         }
+        prev = Some(curr_bitmap);
     }
 
     Ok(())
 }
 
-fn handle_file(path: &Path, term_height: usize, term_width: usize) -> std::io::Result<()> {
-    let Some(extension) = path.extension() else {
-        return Err(Error::other("No file extension"));
-    };
-
-    if extension != "bmp" {
-        return Err(Error::other("Not a Bitmap file extension"));
-    }
-    
+fn handle_file(path: &Path, term_height: usize, term_width: usize, prev: Option<Bitmap>) -> std::io::Result<Bitmap> {
     let bitmap = Bitmap::new(path)?;
-    bitmap.print(term_height, term_width);
-
-    Ok(())
+    bitmap.print(prev, term_height, term_width);
+    Ok(bitmap)
 }
 
 fn main() -> std::io::Result<()> {
@@ -57,7 +51,7 @@ fn main() -> std::io::Result<()> {
     
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
-        return Err(Error::other("Usage: cargo run -- [dirname]"));
+        return Err(Error::other("Usage: cargo run -- [dirname/filename]"));
     }
     
     let path = Path::new(&args[1]);
@@ -65,6 +59,7 @@ fn main() -> std::io::Result<()> {
     if metadata.is_dir() {
         handle_dir(&path, term_height, term_width)
     } else {
-        handle_file(&path, term_height, term_width)
+        handle_file(&path, term_height, term_width, None)?;
+        Ok(())
     }
 }

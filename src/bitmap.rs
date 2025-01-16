@@ -1,12 +1,12 @@
 pub mod bitmap {
     use std::{fs::File, io::Read};
     use std::io::{BufReader, BufRead};
-    use std::io::{Error, Seek, SeekFrom};
+    use std::io::Error;
     use std::path::Path;
     use std::fmt;
     
     use crate::common::common::{read_u16, read_u32, slice_to_usize_le};
-    use crate::ansi::ansi::{erase_in_display, set_foreground_color, Erase, set_cursor_pos, Position};
+    use crate::ansi::ansi::{Erase, Color, CursorPos};
 
     struct FileHeader {
         bf_type: [u8; 2],
@@ -19,6 +19,10 @@ pub mod bitmap {
         fn from_reader<R: BufRead>(reader: &mut R) -> std::io::Result<Self> {
             let mut bf_type = [0; 2];
             reader.read_exact(&mut bf_type)?;
+            if &bf_type != b"BM" {
+                return Err(Error::other("File does not start with Bitmap magic values"));
+            }
+
             let bf_size = read_u32(reader)?;
             let bf_reserved = read_u32(reader)?;
             let bf_off_bits = read_u32(reader)?;
@@ -90,38 +94,6 @@ pub mod bitmap {
         }
     }
 
-    #[derive(Copy, Clone)]
-    pub struct Color {
-        red: u8,
-        green: u8,
-        blue: u8
-    }
-
-    impl fmt::Debug for Color {
-        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            write!(f, "r/g/b: {}/{}/{}", self.red, self.green, self.blue)
-        }
-    }
-
-    impl From<u32> for Color {
-        fn from(value: u32) -> Self {
-            let red = ((value >> 16) & 0xff) as u8;
-            let green = ((value >> 8) & 0xff) as u8;
-            let blue = (value & 0xff) as u8;
-            Color {red, green, blue}
-        }
-    }
-
-    impl Color {
-        pub fn print(&self) {
-            set_foreground_color('█', self.to_string());
-        }
-
-        fn to_string(&self) -> String {
-            format!("{};{};{}", self.red, self.green, self.blue)
-        }
-    }
-
     pub struct Bitmap {
         pub width: usize,
         pub height: usize,
@@ -134,10 +106,6 @@ pub mod bitmap {
             let mut reader = BufReader::new(file);
 
             let file_header = FileHeader::from_reader(&mut reader)?;
-            if &file_header.bf_type != b"BM" {
-                return Err(Error::other("File does not start with Bitmap magic values"));
-            }
-
             let info_header = InfoHeader::from_reader(&mut reader)?;
             if info_header.bi_compression != 0 {
                 return Err(Error::other("Compressed Bitmap files not supported right now"));
@@ -184,9 +152,11 @@ pub mod bitmap {
             Ok(Bitmap {width, height, pixels})
         }
         
-        pub fn print(&self, term_height: usize, term_width: usize) {
-            erase_in_display(Erase::SCREEN); 
-            set_cursor_pos(Position {x: 1, y: 1});
+        pub fn print(&self, prev: Option<Bitmap>, term_height: usize, term_width: usize) {
+            if let None = prev {
+                Erase::SCREEN.erase();
+            }
+            CursorPos::reset_cursor();
             let y_step: f64 = f64::max((self.height as f64) / (term_height as f64), 1.0);
             let x_step: f64 = f64::max((self.width as f64) / (term_width as f64), 1.0);
             let height = std::cmp::min(self.height, term_height);
@@ -196,13 +166,22 @@ pub mod bitmap {
             for _ in 0..height {
                 let y = fy.floor() as usize;
                 let mut fx: f64 = 0.0;
-                for _ in 0..width {
+                for cur_x in 0..width {
                     let x = fx.floor() as usize;
                     fx += x_step;
-                    self.pixels[y][x].print();
+                    
+                    match prev {
+                        Some(ref prev_bitmap) => {
+                            if self.pixels[y][x] != prev_bitmap.pixels[y][x] {
+                                CursorPos::set_horizontal(cur_x + 1);
+                                self.pixels[y][x].print();
+                            }
+                        },
+                        None => self.pixels[y][x].print()
+                    }
                 }
                 fy += y_step;
-                println!("");
+                CursorPos::next_line();
             }
         }
     }
