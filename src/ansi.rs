@@ -11,7 +11,7 @@ pub mod ansi {
     }
 
     impl Erase {
-        pub fn erase(&self) {
+        pub fn erase(self) {
             let n = match self {
                 Erase::CURSOR_TO_END => 0,
                 Erase::CURSOR_TO_BEGIN => 1,
@@ -69,7 +69,7 @@ pub mod ansi {
             CursorPos {x: 1, y: 1}.set_cursor();
         }
 
-        pub fn set_cursor(&self) {
+        pub fn set_cursor(self) {
             print!("{CSI}{};{}H", self.y, self.x);
         }
         
