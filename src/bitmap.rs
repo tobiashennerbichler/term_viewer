@@ -1,14 +1,14 @@
 pub mod bitmap {
     use std::{fs::File, io::Read};
-    use std::io::{BufReader, BufRead};
-    use std::io::{BufWriter, StdoutLock, stdout};
+    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufWriter, stdout};
     use std::io::Error;
     use std::path::Path;
     use std::fmt;
     use crate::ansi::ansi;
     
     use crate::common::common::{read_u16, read_u32, slice_to_usize_le};
-    use crate::ansi::ansi::{Erase, Color, CursorPos};
+    use crate::ansi::ansi::{Erase, Color};
 
     struct FileHeader {
         bf_type: [u8; 2],
@@ -113,35 +113,8 @@ pub mod bitmap {
                 return Err(Error::other("Compressed Bitmap files not supported right now"));
             }
             
-            let num_colortable_entries = match info_header.bi_bit_count {
-                1 | 2 | 4 | 8 => {
-                    if info_header.bi_clr_used == 0 {
-                        2u32.pow(info_header.bi_bit_count.into())
-                    } else {
-                        info_header.bi_clr_used
-                    }
-                },
-                16 | 24 | 32 => 0,
-                _ => return Err(Error::other("Not a valid bpp value"))
-            };
-            
-            if file_header.bf_off_bits < 54 + num_colortable_entries * 4 {
-                return Err(Error::other("Pixel offset too small"));
-            }
+            let color_table = read_colortable(&mut reader, &file_header, &info_header)?;
 
-            //println!("{file_header}");
-            //println!("{info_header}");
-
-            let mut color_table = Vec::new();
-            for _ in 0..num_colortable_entries {
-                let argb = read_u32(&mut reader)?;
-                color_table.push(Color::from(argb));
-            }
-
-            // Discard remaining bytes until start of pixel data
-            let bytes_till_offset: usize = (file_header.bf_off_bits - 54 - num_colortable_entries * 4) as usize;
-            reader.consume(bytes_till_offset);
-            
             let height = info_header.bi_height.abs() as usize;
             let width = info_header.bi_width as usize;
             let mut pixels = read_pixels(&mut reader, height, width, info_header.bi_bit_count, color_table)?;
@@ -154,13 +127,13 @@ pub mod bitmap {
             Ok(Bitmap {width, height, pixels})
         }
         
-        pub fn print(&self, prev: Option<Bitmap>, term_height: usize, term_width: usize) -> std::io::Result<()> {
+        pub fn print(&self, term_height: usize, term_width: usize, prev: Option<Bitmap>) -> std::io::Result<()> {
             let mut writer = get_larger_buffered_stdout(term_height, term_width);
-
             if let None = prev {
                 ansi::erase(Erase::SCREEN, &mut writer)?;
             }
             ansi::reset_cursor(&mut writer)?;
+
             let y_step: f64 = f64::max((self.height as f64) / (term_height as f64), 1.0);
             let x_step: f64 = f64::max((self.width as f64) / (term_width as f64), 1.0);
             let height = std::cmp::min(self.height, term_height);
@@ -189,12 +162,43 @@ pub mod bitmap {
                 fy += y_step;
                 ansi::next_line(&mut writer)?;
             }
+            writer.flush()?;
 
             Ok(())
         }
     }
 
-    fn read_pixels<R: Read + BufRead>(reader: &mut R, height: usize, width: usize, bits_per_pixel: u16, color_table: Vec<Color>) -> std::io::Result<Vec<Vec<Color>>> {
+    fn read_colortable<R: BufRead>(reader: &mut R, file_header: &FileHeader, info_header: &InfoHeader) -> std::io::Result<Vec<Color>> {
+        let num_colortable_entries = match info_header.bi_bit_count {
+            1 | 2 | 4 | 8 => {
+                if info_header.bi_clr_used == 0 {
+                    2u32.pow(info_header.bi_bit_count.into())
+                } else {
+                    info_header.bi_clr_used
+                }
+            },
+            16 | 24 | 32 => 0,
+            _ => return Err(Error::other("Not a valid bpp value"))
+        };
+            
+        if file_header.bf_off_bits < 54 + num_colortable_entries * 4 {
+            return Err(Error::other("Pixel offset too small"));
+        }
+
+        let mut color_table = Vec::new();
+        for _ in 0..num_colortable_entries {
+            let argb = read_u32(reader)?;
+            color_table.push(Color::from(argb));
+        }
+
+        // Discard remaining bytes until start of pixel data
+        let bytes_till_offset: usize = (file_header.bf_off_bits - 54 - num_colortable_entries * 4) as usize;
+        reader.consume(bytes_till_offset);
+
+        Ok(color_table)
+    }
+
+    fn read_pixels<R: BufRead>(reader: &mut R, height: usize, width: usize, bits_per_pixel: u16, color_table: Vec<Color>) -> std::io::Result<Vec<Vec<Color>>> {
         let mut pixels = Vec::new();
         let (bytes_per_line, reads_per_line) = match bits_per_pixel {
             x @ (1 | 2 | 4 | 8) => (width, ((x as usize) * width)/8),
@@ -207,7 +211,7 @@ pub mod bitmap {
             let mut line = Vec::new();
             for _ in 0..reads_per_line {
                 let res = match bits_per_pixel {
-                    x @ (1 | 2 | 4 | 8) => read_color_table(reader, &color_table, x),
+                    x @ (1 | 2 | 4 | 8) => read_indexed(reader, &color_table, x),
                     16 => read_16bpp(reader),
                     24 => read_24bpp(reader),
                     32 => read_32bpp(reader),
@@ -228,7 +232,7 @@ pub mod bitmap {
         Ok(pixels)
     }
     
-    fn read_color_table<R: BufRead>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
+    fn read_indexed<R: BufRead>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
         let mut buf: [u8; 1] = [0; 1];
         reader.read_exact(&mut buf)?;
         let mut pixels = Vec::new();
@@ -278,8 +282,9 @@ pub mod bitmap {
     }
     
     const PAGE_SIZE: usize = 4096;
-    fn get_larger_buffered_stdout(term_height: usize, term_width: usize) -> BufWriter<StdoutLock<'static>> {
-        let size = term_height * term_width;
+    fn get_larger_buffered_stdout(term_height: usize, term_width: usize) -> impl Write {
+        // escape sequence for each pixel takes a few bytes, lets approximate by 16
+        let size = term_height * term_width * 16;
         let aligned_size = if size % PAGE_SIZE == 0 { size } else { ((size / PAGE_SIZE) + 1) * PAGE_SIZE };
         
         BufWriter::with_capacity(aligned_size, stdout().lock())

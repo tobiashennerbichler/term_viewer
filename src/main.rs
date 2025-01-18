@@ -39,7 +39,7 @@ fn handle_dir(path: &Path, term_height: usize, term_width: usize) -> std::io::Re
 
 fn handle_file(path: &Path, term_height: usize, term_width: usize, prev: Option<Bitmap>) -> std::io::Result<Bitmap> {
     let bitmap = Bitmap::new(path)?;
-    bitmap.print(prev, term_height, term_width)?;
+    bitmap.print(term_height, term_width, prev)?;
     Ok(bitmap)
 }
 
