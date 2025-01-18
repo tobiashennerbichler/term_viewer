@@ -1,7 +1,9 @@
 pub mod ansi {
     use std::fmt;
+    use std::io::{BufWriter, StdoutLock, Write};
 
     const CSI: &str = "\x1b[";
+    type StdoutWriter = BufWriter<StdoutLock<'static>>;
 
     pub enum Erase {
         CURSOR_TO_END,
@@ -9,18 +11,17 @@ pub mod ansi {
         SCREEN,
         SCREEN_AND_DELETE
     }
-
-    impl Erase {
-        pub fn erase(self) {
-            let n = match self {
-                Erase::CURSOR_TO_END => 0,
-                Erase::CURSOR_TO_BEGIN => 1,
-                Erase::SCREEN => 2,
-                Erase::SCREEN_AND_DELETE => 3
-            };
+    
+    
+    pub fn erase(mode: Erase, writer: &mut StdoutWriter) -> std::io::Result<()> {
+        let n = match mode {
+            Erase::CURSOR_TO_END => 0,
+            Erase::CURSOR_TO_BEGIN => 1,
+            Erase::SCREEN => 2,
+            Erase::SCREEN_AND_DELETE => 3
+        };
             
-            print!("{CSI}{n}J");
-        }
+        write!(writer, "{CSI}{n}J")
     }
 
     #[derive(Copy, Clone, PartialEq)]
@@ -46,8 +47,8 @@ pub mod ansi {
     }
 
     impl Color {
-        pub fn print(&self) {
-            set_foreground_color('█', self.to_string());
+        pub fn print(&self, writer: &mut StdoutWriter) -> std::io::Result<()> {
+            set_foreground_color(writer, '█', self.to_string())
         }
 
         fn to_string(&self) -> String {
@@ -55,8 +56,8 @@ pub mod ansi {
         }
     }
 
-    fn set_foreground_color(character: char, color: String) {
-        print!("{CSI}38;2;{color}m{character}{CSI}m")
+    fn set_foreground_color(writer: &mut BufWriter<StdoutLock<'static>>, character: char, color: String) -> std::io::Result<()> {
+        write!(writer, "{CSI}38;2;{color}m{character}{CSI}m")
     }
 
     pub struct CursorPos {
@@ -64,21 +65,19 @@ pub mod ansi {
         pub y: usize
     }
     
-    impl CursorPos {
-        pub fn reset_cursor() {
-            CursorPos {x: 1, y: 1}.set_cursor();
-        }
+    pub fn reset_cursor(writer: &mut StdoutWriter) -> std::io::Result<()> {
+        set_cursor(CursorPos {x: 1, y: 1}, writer)
+    }
 
-        pub fn set_cursor(self) {
-            print!("{CSI}{};{}H", self.y, self.x);
-        }
+    pub fn set_cursor(pos: CursorPos, writer: &mut StdoutWriter) -> std::io::Result<()> {
+        write!(writer, "{CSI}{};{}H", pos.y, pos.x)
+    }
         
-        pub fn set_horizontal(x: usize) {
-            print!("{CSI}{}G", x);
-        }
+    pub fn set_horizontal(x: usize, writer: &mut StdoutWriter) -> std::io::Result<()> {
+        write!(writer, "{CSI}{}G", x)
+    }
         
-        pub fn next_line() {
-            print!("{CSI}1E");
-        }
+    pub fn next_line(writer: &mut StdoutWriter) -> std::io::Result<()> {
+        write!(writer, "{CSI}1E")
     }
 }

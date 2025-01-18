@@ -1,9 +1,11 @@
 pub mod bitmap {
     use std::{fs::File, io::Read};
     use std::io::{BufReader, BufRead};
+    use std::io::{BufWriter, StdoutLock, stdout};
     use std::io::Error;
     use std::path::Path;
     use std::fmt;
+    use crate::ansi::ansi;
     
     use crate::common::common::{read_u16, read_u32, slice_to_usize_le};
     use crate::ansi::ansi::{Erase, Color, CursorPos};
@@ -152,11 +154,13 @@ pub mod bitmap {
             Ok(Bitmap {width, height, pixels})
         }
         
-        pub fn print(&self, prev: Option<Bitmap>, term_height: usize, term_width: usize) {
+        pub fn print(&self, prev: Option<Bitmap>, term_height: usize, term_width: usize) -> std::io::Result<()> {
+            let mut writer = get_larger_buffered_stdout(term_height, term_width);
+
             if let None = prev {
-                Erase::SCREEN.erase();
+                ansi::erase(Erase::SCREEN, &mut writer)?;
             }
-            CursorPos::reset_cursor();
+            ansi::reset_cursor(&mut writer)?;
             let y_step: f64 = f64::max((self.height as f64) / (term_height as f64), 1.0);
             let x_step: f64 = f64::max((self.width as f64) / (term_width as f64), 1.0);
             let height = std::cmp::min(self.height, term_height);
@@ -173,16 +177,20 @@ pub mod bitmap {
                     match prev {
                         Some(ref prev_bitmap) => {
                             if self.pixels[y][x] != prev_bitmap.pixels[y][x] {
-                                CursorPos::set_horizontal(cur_x + 1);
-                                self.pixels[y][x].print();
+                                ansi::set_horizontal(cur_x + 1, &mut writer)?;
+                                self.pixels[y][x].print(&mut writer)?;
                             }
                         },
-                        None => self.pixels[y][x].print()
+                        None => {
+                            self.pixels[y][x].print(&mut writer)?;
+                        }
                     }
                 }
                 fy += y_step;
-                CursorPos::next_line();
+                ansi::next_line(&mut writer)?;
             }
+
+            Ok(())
         }
     }
 
@@ -267,5 +275,13 @@ pub mod bitmap {
     fn read_32bpp<R: BufRead>(reader: &mut R) -> std::io::Result<Vec<Color>> {
         let argb = read_u32(reader)?;
         Ok(vec![Color::from(argb)])
+    }
+    
+    const PAGE_SIZE: usize = 4096;
+    fn get_larger_buffered_stdout(term_height: usize, term_width: usize) -> BufWriter<StdoutLock<'static>> {
+        let size = term_height * term_width;
+        let aligned_size = if size % PAGE_SIZE == 0 { size } else { ((size / PAGE_SIZE) + 1) * PAGE_SIZE };
+        
+        BufWriter::with_capacity(aligned_size, stdout().lock())
     }
 }
