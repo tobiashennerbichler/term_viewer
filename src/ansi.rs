@@ -28,7 +28,7 @@ pub mod ansi {
         pub green: u8,
         pub blue: u8
     }
-
+    
     impl fmt::Debug for Color {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "r/g/b: {}/{}/{}", self.red, self.green, self.blue)
@@ -69,6 +69,10 @@ pub mod ansi {
 
     pub fn set_cursor<W: Write>(pos: CursorPos, writer: &mut W) -> std::io::Result<()> {
         write!(writer, "{CSI}{};{}H", pos.y, pos.x)
+    }
+
+    pub fn cursor_forward<W: Write>(step: usize, writer: &mut W) -> std::io::Result<()> {
+        write!(writer, "{CSI}{step}C")
     }
         
     pub fn set_horizontal<W: Write>(x: usize, writer: &mut W) -> std::io::Result<()> {

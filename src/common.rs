@@ -1,5 +1,5 @@
 pub mod common {
-    use std::io::BufRead;
+    use std::io::{BufRead, BufWriter, Write};
 
     enum Endianess {
         Little,
@@ -46,5 +46,14 @@ pub mod common {
         let mut buf = [0; 2];
         reader.read_exact(&mut buf)?;
         Ok(slice_to_usize_le(&buf) as u16)
+    }
+
+    pub const PAGE_SIZE: usize = 4096;
+    pub fn get_larger_buffered_stdout(term_height: usize, term_width: usize) -> impl Write {
+        // escape sequence for each pixel takes a few bytes, lets approximate by 16
+        let size = term_height * term_width * 16;
+        let aligned_size = if size % PAGE_SIZE == 0 { size } else { ((size / PAGE_SIZE) + 1) * PAGE_SIZE };
+        
+        BufWriter::with_capacity(aligned_size, std::io::stdout().lock())
     }
 }

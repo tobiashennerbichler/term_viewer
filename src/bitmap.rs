@@ -1,13 +1,12 @@
 pub mod bitmap {
-    use std::{fs::File, io::Read};
-    use std::io::{BufRead, BufReader, Write};
-    use std::io::{BufWriter, stdout};
-    use std::io::Error;
+    use std::fs::File;
+    use std::io::{Error, BufRead, BufReader, BufWriter, Write, stdout};
     use std::path::Path;
     use std::fmt;
-    use crate::ansi::ansi;
     
-    use crate::common::common::{read_u16, read_u32, slice_to_usize_le};
+    use termsize::Size;
+    use crate::ansi::ansi;
+    use crate::common::common::{read_u16, read_u32, slice_to_usize_le, get_larger_buffered_stdout, PAGE_SIZE};
     use crate::ansi::ansi::{Erase, Color};
 
     struct FileHeader {
@@ -105,7 +104,7 @@ pub mod bitmap {
     impl Bitmap {
         pub fn new(path: &Path) -> std::io::Result<Self> {
             let file = File::open(path)?;
-            let mut reader = BufReader::new(file);
+            let mut reader = BufReader::with_capacity(PAGE_SIZE*PAGE_SIZE, file);
 
             let file_header = FileHeader::from_reader(&mut reader)?;
             let info_header = InfoHeader::from_reader(&mut reader)?;
@@ -127,9 +126,11 @@ pub mod bitmap {
             Ok(Bitmap {width, height, pixels})
         }
         
-        pub fn print(&self, term_height: usize, term_width: usize, prev: Option<Bitmap>) -> std::io::Result<()> {
+        pub fn print(&self, term_size: &Size, prev: Option<Bitmap>) -> std::io::Result<()> {
+            let term_height = term_size.rows as usize;
+            let term_width = term_size.cols as usize;
             let mut writer = get_larger_buffered_stdout(term_height, term_width);
-            if let None = prev {
+            if prev.is_none() {
                 ansi::erase(Erase::SCREEN, &mut writer)?;
             }
             ansi::reset_cursor(&mut writer)?;
@@ -143,21 +144,17 @@ pub mod bitmap {
             for _ in 0..height {
                 let y = fy.floor() as usize;
                 let mut fx: f64 = 0.0;
-                for cur_x in 0..width {
+                for _ in 0..width {
                     let x = fx.floor() as usize;
                     fx += x_step;
-                    
-                    match prev {
-                        Some(ref prev_bitmap) => {
-                            if self.pixels[y][x] != prev_bitmap.pixels[y][x] {
-                                ansi::set_horizontal(cur_x + 1, &mut writer)?;
-                                self.pixels[y][x].print(&mut writer)?;
-                            }
-                        },
-                        None => {
-                            self.pixels[y][x].print(&mut writer)?;
-                        }
+
+                    let is_transparent_pixel = prev.as_ref().is_some_and(|prev_bitmap| self.pixels[y][x] == prev_bitmap.pixels[y][x]);
+                    if is_transparent_pixel {
+                        ansi::cursor_forward(1, &mut writer)?;
+                        continue;
                     }
+                    
+                    self.pixels[y][x].print(&mut writer)?;
                 }
                 fy += y_step;
                 ansi::next_line(&mut writer)?;
@@ -185,7 +182,7 @@ pub mod bitmap {
             return Err(Error::other("Pixel offset too small"));
         }
 
-        let mut color_table = Vec::new();
+        let mut color_table = Vec::with_capacity(num_colortable_entries as usize);
         for _ in 0..num_colortable_entries {
             let argb = read_u32(reader)?;
             color_table.push(Color::from(argb));
@@ -199,7 +196,7 @@ pub mod bitmap {
     }
 
     fn read_pixels<R: BufRead>(reader: &mut R, height: usize, width: usize, bits_per_pixel: u16, color_table: Vec<Color>) -> std::io::Result<Vec<Vec<Color>>> {
-        let mut pixels = Vec::new();
+        let mut pixels = Vec::with_capacity(height);
         let (bytes_per_line, reads_per_line) = match bits_per_pixel {
             x @ (1 | 2 | 4 | 8) => (width, ((x as usize) * width)/8),
             x @ (16 | 24 | 32) => (((x as usize) * width)/8, width),
@@ -208,7 +205,7 @@ pub mod bitmap {
         let num_align_bytes = if bytes_per_line % 4 == 0 { 0 } else { 4 - (bytes_per_line % 4) };
 
         for _ in 0..height {
-            let mut line = Vec::new();
+            let mut line = Vec::with_capacity(reads_per_line);
             for _ in 0..reads_per_line {
                 let res = match bits_per_pixel {
                     x @ (1 | 2 | 4 | 8) => read_indexed(reader, &color_table, x),
@@ -235,10 +232,11 @@ pub mod bitmap {
     fn read_indexed<R: BufRead>(reader: &mut R, color_table: &Vec<Color>, bits_per_pixel: u16) -> std::io::Result<Vec<Color>> {
         let mut buf: [u8; 1] = [0; 1];
         reader.read_exact(&mut buf)?;
-        let mut pixels = Vec::new();
+        let num_pixel = 8/bits_per_pixel;
+        let mut pixels = Vec::with_capacity(num_pixel as usize);
         let start_shift = 8 - bits_per_pixel;
         let byte = buf[0] as usize;
-        for i in 0..(8/bits_per_pixel) {
+        for i in 0..num_pixel {
             let index: usize = (byte >> (start_shift - bits_per_pixel*i)) & (2usize.pow(bits_per_pixel as u32) - 1);
             if index > color_table.len() {
                 return Err(Error::other("Out-of-bounds index"));
@@ -279,14 +277,5 @@ pub mod bitmap {
     fn read_32bpp<R: BufRead>(reader: &mut R) -> std::io::Result<Vec<Color>> {
         let argb = read_u32(reader)?;
         Ok(vec![Color::from(argb)])
-    }
-    
-    const PAGE_SIZE: usize = 4096;
-    fn get_larger_buffered_stdout(term_height: usize, term_width: usize) -> impl Write {
-        // escape sequence for each pixel takes a few bytes, lets approximate by 16
-        let size = term_height * term_width * 16;
-        let aligned_size = if size % PAGE_SIZE == 0 { size } else { ((size / PAGE_SIZE) + 1) * PAGE_SIZE };
-        
-        BufWriter::with_capacity(aligned_size, stdout().lock())
-    }
+    }  
 }
