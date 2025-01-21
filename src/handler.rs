@@ -18,9 +18,7 @@ pub fn handle_interactive() -> std::io::Result<()> {
     let term_size = termsize::get().expect("Could not get termsize");
     let mut window = Window::new(term_size)?;
     window.setup_termios()?;
-    let res = window.do_interactive();
-    window.restore_termios()?;
-    res
+    window.do_interactive()
 }
 
 pub fn handle_path(path: &Path) -> std::io::Result<()> {

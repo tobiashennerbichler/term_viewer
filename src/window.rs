@@ -35,6 +35,12 @@ pub struct Window {
 const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
 const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
 
+impl Drop for Window {
+    fn drop(&mut self) {
+        self.restore_termios();
+    }
+}
+
 impl Window {
     pub fn new(term_size: Size) -> std::io::Result<Self> {
         let term_height = term_size.rows as usize;
@@ -117,6 +123,8 @@ impl Window {
         Ok(())
     }
 
+    // TODO: only print what changed, compare current dir to saved one and flag lines that must be reprinted (e.g. highlighting, name change)
+    // TODO: also reprint if order changed, so also flag all following entries
     fn print_current_dir<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         let entry_offset = self.page.x_page * self.num_printable_lines;
 
@@ -177,13 +185,11 @@ impl Window {
 
     fn select_current_line<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
         if self.pos.y <= self.top_reserved || self.pos.y >= self.num_printable_lines {
-            self.restore_termios()?;
             panic!("Cursor should not be on reserved lines");
         }
 
         let entry_index = self.pos.y - self.top_reserved - 1;
-        if entry_index > self.current_dir_state.len() {
-            self.restore_termios()?;
+        if entry_index >= self.current_dir_state.len() {
             panic!("Cursor points to non-existing entry");
         }
         let selected_entry = &self.current_dir_state[entry_index];
@@ -214,13 +220,11 @@ impl Window {
         Ok(())
     }
     
-    pub fn restore_termios(&self) -> std::io::Result<()> {
+    pub fn restore_termios(&self) {
         let fd = std::io::stdin().as_raw_fd();
         if let Err(_) = tcsetattr(fd, TCSADRAIN, &self.prev_termios) {
-            return Err(Error::other("Could not restore tty attributes"));
+            panic!("Could not restore tty attributes - cannot salvage");
         }
-
-        Ok(())
     }
 }
 
