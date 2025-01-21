@@ -104,7 +104,7 @@ pub mod bitmap {
     impl Bitmap {
         pub fn new(path: &Path) -> std::io::Result<Self> {
             let file = File::open(path)?;
-            let mut reader = BufReader::with_capacity(PAGE_SIZE*PAGE_SIZE, file);
+            let mut reader = BufReader::with_capacity(256*PAGE_SIZE, file);
 
             let file_header = FileHeader::from_reader(&mut reader)?;
             let info_header = InfoHeader::from_reader(&mut reader)?;

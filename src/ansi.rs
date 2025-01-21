@@ -46,7 +46,7 @@ pub mod ansi {
 
     impl Color {
         pub fn print<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-            set_foreground_color(writer, '█', self.to_string())
+            set_foreground_color(writer, "█", self)
         }
 
         fn to_string(&self) -> String {
@@ -54,8 +54,8 @@ pub mod ansi {
         }
     }
 
-    fn set_foreground_color<W: Write>(writer: &mut W, character: char, color: String) -> std::io::Result<()> {
-        write!(writer, "{CSI}38;2;{color}m{character}{CSI}m")
+    pub fn set_foreground_color<W: Write>(writer: &mut W, text: &str, color: &Color) -> std::io::Result<()> {
+        write!(writer, "{CSI}38;2;{}m{text}{CSI}m", color.to_string())
     }
 
     pub struct CursorPos {
@@ -81,5 +81,17 @@ pub mod ansi {
         
     pub fn next_line<W: Write>(writer: &mut W) -> std::io::Result<()> {
         write!(writer, "{CSI}1E")
+    }
+
+    pub fn make_underline<W: Write>(writer: &mut W) -> std::io::Result<()> {
+        write!(writer, "{CSI}4m")
+    }
+
+    pub fn make_fast_blinking<W: Write>(writer: &mut W) -> std::io::Result<()> {
+        write!(writer, "{CSI}6m")
+    }
+
+    pub fn reset_SGR<W: Write>(writer: &mut W) -> std::io::Result<()> {
+        write!(writer, "{CSI}0m")
     }
 }
