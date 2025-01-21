@@ -47,7 +47,18 @@ impl Window {
         Ok(Window {term_size, reserved_lines, num_printable_lines, pos, page, dir_name, current_dir_state})
     }
 
-    pub fn read_current_dir(&mut self) -> std::io::Result<()> {
+    pub fn do_interactive(&mut self) -> std::io::Result<()> {
+        loop {
+            self.read_current_dir()?;
+            self.print_current_dir()?;
+            
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+
+        Ok(())
+    }
+
+    fn read_current_dir(&mut self) -> std::io::Result<()> {
         let current_dir = current_dir()?;
         let entries = read_dir(&current_dir)?;
         let mut dir_state = Vec::with_capacity(self.num_printable_lines);
@@ -81,7 +92,7 @@ impl Window {
         Ok(())
     }
 
-    pub fn print_current_dir(&self) -> std::io::Result<()> {
+    fn print_current_dir(&self) -> std::io::Result<()> {
         let mut writer = std::io::stdout();
         let entry_offset = self.page.x_page * self.num_printable_lines;
 
@@ -103,6 +114,7 @@ impl Window {
 
             counter += 1;
         }
+        writer.flush()?;
 
         Ok(())
     }

@@ -17,10 +17,7 @@ const DURATION_PER_FRAME: Duration = Duration::from_millis(MILLIS_PER_FRAME);
 pub fn handle_interactive() -> std::io::Result<()> {
     let term_size = termsize::get().expect("Could not get termsize");
     let mut window = Window::new(term_size)?;
-    window.read_current_dir()?;
-    window.print_current_dir()?;
-
-    Ok(())
+    window.do_interactive()
 }
 
 pub fn handle_path(path: &Path) -> std::io::Result<()> {

@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 termsize = "0.1.9"
+gif = "0.13.1"
