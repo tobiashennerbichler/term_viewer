@@ -58,6 +58,7 @@ pub mod ansi {
         write!(writer, "{CSI}38;2;{}m{text}{CSI}m", color.to_string())
     }
 
+    #[derive(Copy, Clone)]
     pub struct CursorPos {
         pub x: usize,
         pub y: usize
@@ -91,7 +92,7 @@ pub mod ansi {
         write!(writer, "{CSI}6m")
     }
 
-    pub fn reset_SGR<W: Write>(writer: &mut W) -> std::io::Result<()> {
+    pub fn reset_sgr<W: Write>(writer: &mut W) -> std::io::Result<()> {
         write!(writer, "{CSI}0m")
     }
 }

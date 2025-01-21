@@ -1,9 +1,11 @@
 use core::num;
-use std::io::{Error, Write};
+use std::os::fd::AsRawFd;
+use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};
 use std::fs::read_dir;
 use std::env::current_dir;
 
+use termios::{tcgetattr, tcsetattr, Termios, ICANON, ECHO, VMIN, TCSADRAIN};
 use termsize::Size;
 use crate::ansi::ansi::{self, Erase, CursorPos, Color};
 
@@ -20,12 +22,14 @@ struct FileInfo {
 
 pub struct Window {
     term_size: Size,
-    reserved_lines: usize,
+    top_reserved: usize,
+    bottom_reserved: usize,
     num_printable_lines: usize,
     pos: CursorPos,
     page: Page,
     dir_name: String,
-    current_dir_state: Vec<FileInfo>
+    current_dir_state: Vec<FileInfo>,
+    prev_termios: Termios
 }
 
 const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
@@ -34,25 +38,40 @@ const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
 impl Window {
     pub fn new(term_size: Size) -> std::io::Result<Self> {
         let term_height = term_size.rows as usize;
-        let reserved_lines = 4;
-        if term_height <= reserved_lines {
+        let top_reserved = 2;
+        let bottom_reserved = 2;
+        if term_height <= top_reserved + bottom_reserved {
             return Err(Error::other("Terminal not big enough"));
         }
-        let num_printable_lines = term_height - reserved_lines;
 
-        let pos = CursorPos {x: 1, y: 6};
+        let num_printable_lines = term_height - top_reserved - bottom_reserved;
+        let pos = CursorPos {x: 1, y: 3};
         let page = Page {x_page: 0, y_page: 0};
         let dir_name = String::new();
         let current_dir_state = Vec::with_capacity(num_printable_lines);
-        Ok(Window {term_size, reserved_lines, num_printable_lines, pos, page, dir_name, current_dir_state})
+        let prev_termios = get_termios()?;
+        Ok(Window {term_size, top_reserved, bottom_reserved, num_printable_lines, pos, page, dir_name, current_dir_state, prev_termios})
     }
 
     pub fn do_interactive(&mut self) -> std::io::Result<()> {
+        let mut writer = std::io::stdout();
         loop {
             self.read_current_dir()?;
-            self.print_current_dir()?;
+            self.print_current_dir(&mut writer)?;
+        
+            let mut buf = [0; 1];
+            if let Err(_) = std::io::stdin().read_exact(&mut buf) {
+               continue; 
+            }
+            match buf[0] {
+                b'w' => self.pos.y -= 1,
+                b's' => self.pos.y += 1,
+                b'q' => break,
+                _ => continue
+            }
+            self.select_current_line(&mut writer)?;
             
-            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
         Ok(())
@@ -67,6 +86,12 @@ impl Window {
             return Err(Error::other("Could not convert current dirname to str"));
         };
         let dir_name = String::from(dir_name);
+
+        // First entry is parent dir if exists
+        if let Some(parent_dir) = current_dir.parent() {
+            let parent_info = FileInfo {path: parent_dir.to_path_buf(), file_name: String::from(".."), canon_name: String::from("..")};
+            dir_state.push(parent_info);
+        }
 
         for entry in entries {
             let dir_entry = entry?;
@@ -92,25 +117,23 @@ impl Window {
         Ok(())
     }
 
-    fn print_current_dir(&self) -> std::io::Result<()> {
-        let mut writer = std::io::stdout();
+    fn print_current_dir<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
         let entry_offset = self.page.x_page * self.num_printable_lines;
 
+        self.print_header(writer, &self.dir_name)?;
         let infos = self.current_dir_state.iter().skip(entry_offset).take(self.num_printable_lines);
-        self.print_header(&mut writer, &self.dir_name)?;
  
-        let mut counter = 2;
+        let mut counter = self.top_reserved + 1;
         for info in infos {
             let metadata = info.path.metadata()?;
-
             let index = if metadata.is_file() { 0 } else { 1 };
 
             print!("{} ", SYMBOLS[index]);
-            self.print_highlighted_if(counter, &info.file_name, &mut writer)?;
+            self.print_highlighted_if(counter, &info.file_name, writer)?;
             if metadata.is_symlink() {
                 print!(" {} {}", SYMBOLS[3], &info.canon_name);
             }
-            ansi::next_line(&mut writer)?;
+            ansi::next_line(writer)?;
 
             counter += 1;
         }
@@ -134,11 +157,6 @@ impl Window {
         ansi::set_foreground_color(writer, &divider, &HEADER_COLOR)?;
         ansi::next_line(writer)?;
 
-        // Print ".." path
-        print!("{} ", SYMBOLS[1]);
-        self.print_highlighted_if(1, "..", writer)?;
-        ansi::next_line(writer)?;
-        
         Ok(())
     }
     
@@ -151,7 +169,55 @@ impl Window {
         print!("{to_highlight}");
         
         if highlighted {
-            ansi::reset_SGR(writer)?;
+            ansi::reset_sgr(writer)?;
+        }
+
+        Ok(())
+    }
+
+    fn select_current_line<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        if self.pos.y <= self.top_reserved || self.pos.y >= self.num_printable_lines {
+            self.restore_termios()?;
+            panic!("Cursor should not be on reserved lines");
+        }
+
+        let entry_index = self.pos.y - self.top_reserved - 1;
+        if entry_index > self.current_dir_state.len() {
+            self.restore_termios()?;
+            panic!("Cursor points to non-existing entry");
+        }
+        let selected_entry = &self.current_dir_state[entry_index];
+        let symbol_overhead = 3;
+        let x = if selected_entry.path.is_symlink() {
+            selected_entry.file_name.chars().count() + selected_entry.file_name.chars().count() + 2*symbol_overhead + 1
+        } else {
+            selected_entry.file_name.chars().count() + symbol_overhead + 1
+        };
+        
+        self.pos.x = x;
+        ansi::set_cursor(self.pos, writer)?;
+        Ok(())
+    }
+
+    pub fn setup_termios(&self) -> std::io::Result<()> {
+        let fd = std::io::stdin().as_raw_fd();
+        let Ok(mut termios) = Termios::from_fd(fd) else {
+            return Err(Error::other("Could not create termios from stdin"));
+        };
+
+        termios.c_lflag &= !(ICANON | ECHO);
+        termios.c_cc[VMIN] = 0;
+        if let Err(_) = tcsetattr(fd, TCSADRAIN, &termios) {
+            return Err(Error::other("Could not set tty attributes"));
+        }
+    
+        Ok(())
+    }
+    
+    pub fn restore_termios(&self) -> std::io::Result<()> {
+        let fd = std::io::stdin().as_raw_fd();
+        if let Err(_) = tcsetattr(fd, TCSADRAIN, &self.prev_termios) {
+            return Err(Error::other("Could not restore tty attributes"));
         }
 
         Ok(())
@@ -160,4 +226,17 @@ impl Window {
 
 fn path_to_str(path: &Path) -> Option<&str> {
     path.file_name().and_then(|os_filename| os_filename.to_str())
+}
+
+fn get_termios() -> std::io::Result<Termios> {
+    let fd = std::io::stdin().as_raw_fd();
+    let Ok(mut termios) = Termios::from_fd(fd) else {
+        return Err(Error::other("Cannot create termios from stdin"));
+    };
+
+    if let Err(_) = tcgetattr(fd, &mut termios) {
+        return Err(Error::other("Could not get tty attributes"));
+    }
+
+    Ok(termios)
 }
