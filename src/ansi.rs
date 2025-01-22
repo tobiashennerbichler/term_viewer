@@ -8,18 +8,31 @@ pub mod ansi {
         CURSOR_TO_END,
         CURSOR_TO_BEGIN,
         SCREEN,
-        SCREEN_AND_DELETE
+        SCREEN_AND_DELETE,
+        CURSOR_TO_LINE_END,
+        CURSOR_TO_LINE_BEGIN,
+        LINE
     }
     
     pub fn erase<W: Write>(mode: Erase, writer: &mut W) -> std::io::Result<()> {
+        let code = match mode {
+            Erase::CURSOR_TO_END | 
+            Erase::CURSOR_TO_BEGIN |
+            Erase::SCREEN |
+            Erase::SCREEN_AND_DELETE => 'J',
+            Erase::CURSOR_TO_LINE_END |
+            Erase::CURSOR_TO_LINE_BEGIN |
+            Erase::LINE => 'K'
+        };
+
         let n = match mode {
-            Erase::CURSOR_TO_END => 0,
-            Erase::CURSOR_TO_BEGIN => 1,
-            Erase::SCREEN => 2,
-            Erase::SCREEN_AND_DELETE => 3
+            Erase::CURSOR_TO_END | Erase::CURSOR_TO_LINE_END => 0,
+            Erase::CURSOR_TO_BEGIN | Erase::CURSOR_TO_LINE_BEGIN => 1,
+            Erase::SCREEN | Erase::LINE => 2,
+            Erase::SCREEN_AND_DELETE => 3,
         };
             
-        write!(writer, "{CSI}{n}J")
+        write!(writer, "{CSI}{n}{code}")
     }
 
     #[derive(Copy, Clone, PartialEq)]
