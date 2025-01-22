@@ -10,6 +10,13 @@ use termios::{tcgetattr, tcsetattr, Termios, ICANON, ECHO, VMIN, TCSADRAIN};
 use termsize::Size;
 use crate::ansi::ansi::{self, Erase, CursorPos, Color};
 
+const HEADER_RESERVED: usize = 2;
+const FOOTER_RESERVED: usize = 3;
+const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
+const FOOTER_COLOR: Color = Color { red: 0x23, green: 0x34, blue: 0x58 };
+const ERROR_COLOR:  Color = Color { red: 0xff, green: 0x08, blue: 0x4a };
+const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
+
 struct Page {
     x_page: usize,
     y_page: usize
@@ -33,8 +40,6 @@ impl PartialEq for FileInfo {
     }
 }
 
-const HEADER_RESERVED: usize = 2;
-const FOOTER_RESERVED: usize = 2;
 struct WindowMetadata {
     term_size: Size,
     printable_start: usize,
@@ -53,12 +58,9 @@ pub struct Window {
     dir_state: DirState,
     pos: CursorPos,
     page: Page,
+    last_error: Option<String>,
     prev_termios: Termios
 }
-
-const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
-const FOOTER_COLOR: Color = Color { red: 0x23, green: 0x34, blue: 0x58 };
-const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
 
 impl Drop for Window {
     fn drop(&mut self) {
@@ -94,35 +96,39 @@ impl Window {
 
         let pos = CursorPos {x: 1, y: printable_start};
         let page = Page {x_page: 0, y_page: 0};
+        let last_error = None;
         let prev_termios = get_termios()?;
         Ok(Window {
             metadata,
             dir_state,
             pos,
             page,
+            last_error,
             prev_termios
         })
     }
 
-    // TODO: only update when button pressed
     pub fn do_interactive(&mut self) -> std::io::Result<()> {
         let mut writer = std::io::stdout();
         ansi::erase(Erase::SCREEN, &mut writer)?;
-        self.update_dir_state(&mut writer)?;
+        self.read_current_dir()?;
+        self.print_current_dir(&mut writer)?;
 
         loop {
             let Ok(input) = read_input() else {
                 continue;
             };
+
             match input {
                 b'w'  => self.move_up(&mut writer)?,
                 b's'  => self.move_down(&mut writer)?,
                 b'\n' => self.enter_dir()?,
-                b'u'  => self.update_dir_state(&mut writer)?,
+                b'u'  => self.read_current_dir()?,
                 b'q'  => break,
                 _     => continue
-            }
-            
+            };
+            self.print_current_dir(&mut writer)?;
+           
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -150,7 +156,9 @@ impl Window {
 
         // Read max num_printable_lines directory entries
         for entry in entries {
-            let dir_entry = entry?;
+            let Ok(dir_entry) = entry else {
+                continue;
+            };
             let path = dir_entry.path();
             let Some(file_name) = path_to_string(&path) else {
                 continue;
@@ -178,6 +186,7 @@ impl Window {
     //TODO: read_current_dir: snap cursor back to last entry on last page if new size shorter -> set redraws accordingly
     //also be mindful about resetting previously selected line
     //TODO: do update_term_size every frame, remove it from read_directory
+    //TODO: update broken when resizing down
     fn print_current_dir<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
         self.print_header(writer, &self.dir_state.name)?;
  
@@ -233,7 +242,7 @@ impl Window {
         Ok(())
     }
 
-    fn print_footer<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    fn print_footer<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
         ansi::set_cursor(CursorPos {x: 1, y: self.metadata.footer_start}, writer)?;
         
         let page_text = format!("Page: {}", self.page.y_page);
@@ -244,6 +253,12 @@ impl Window {
 
         ansi::set_foreground_color(writer, &page_text, &FOOTER_COLOR)?;
         ansi::next_line(writer)?;
+
+        if let Some(ref error) = self.last_error {
+            ansi::set_foreground_color(writer, error, &ERROR_COLOR)?;
+            ansi::next_line(writer)?;
+            self.last_error = None;
+        }
 
         Ok(())
     }
@@ -263,66 +278,10 @@ impl Window {
         Ok(())
     }
 
-    fn move_up<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
-        let line_index = self.pos_to_line_index(self.pos.y);
-        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
-        let file_index = line_index + entry_offset;
-        if file_index == 0 {
-            return Err(Error::other("Cannot move further"));
-        }
-
-        if self.pos.y == self.metadata.printable_start {
-            self.page.y_page -= 1;
-            self.pos.y = self.metadata.footer_start - 1;
-            self.set_entire_page_redraw(self.page.y_page, true);
-        } else {
-            self.pos.y -= 1;
-            self.dir_state.files[file_index].redraw = true;
-            self.dir_state.files[file_index - 1].redraw = true;
-        }
-        self.print_current_dir(writer)?;
-
-        Ok(())
-    }
-    
-    fn move_down<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
-        let line_index = self.pos_to_line_index(self.pos.y);
-        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
-        let file_index = line_index + entry_offset;
-        if file_index == self.dir_state.files.len() - 1 {
-            return Err(Error::other("Cannot move further"));
-        }
-
-        if self.pos.y == self.metadata.footer_start - 1 {
-            self.page.y_page += 1;
-            self.pos.y = self.metadata.printable_start;
-            self.set_entire_page_redraw(self.page.y_page, true);
-        } else {
-            self.pos.y += 1;
-            self.dir_state.files[file_index].redraw = true;
-            self.dir_state.files[file_index + 1].redraw = true;
-        }
-        self.print_current_dir(writer)?;
-
-        Ok(())
-    }
-
-    fn enter_dir(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn update_dir_state<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
-        self.read_current_dir()?;
-        self.print_current_dir(writer)
-    }
-
     fn select_current_line<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
         let line_index = self.pos_to_line_index(self.pos.y);
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
         let file_index = line_index + entry_offset;
-        if file_index >= self.dir_state.files.len() {
-            panic!("Cursor points to non-existing file");
-        }
 
         let selected_entry = &self.dir_state.files[file_index];
         let symbol_overhead = 3;
@@ -334,6 +293,55 @@ impl Window {
         
         self.pos.x = x;
         ansi::set_cursor(self.pos, writer)?;
+        Ok(())
+    }
+
+
+    fn move_up<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        let line_index = self.pos_to_line_index(self.pos.y);
+        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
+        let file_index = line_index + entry_offset;
+        if file_index == 0 {
+            self.last_error = Some(String::from("Error: Cannot move further up"));
+            return Ok(());
+        }
+
+        if self.pos.y == self.metadata.printable_start {
+            self.page.y_page -= 1;
+            self.pos.y = self.metadata.footer_start - 1;
+            self.set_entire_page_redraw(self.page.y_page, true);
+        } else {
+            self.pos.y -= 1;
+            self.dir_state.files[file_index].redraw = true;
+            self.dir_state.files[file_index - 1].redraw = true;
+        }
+
+        Ok(())
+    }
+    
+    fn move_down<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        let line_index = self.pos_to_line_index(self.pos.y);
+        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
+        let file_index = line_index + entry_offset;
+        if file_index == self.dir_state.files.len() - 1 {
+            self.last_error = Some(String::from("Error: Cannot move further down"));
+            return Ok(());
+        }
+
+        if self.pos.y == self.metadata.footer_start - 1 {
+            self.page.y_page += 1;
+            self.pos.y = self.metadata.printable_start;
+            self.set_entire_page_redraw(self.page.y_page, true);
+        } else {
+            self.pos.y += 1;
+            self.dir_state.files[file_index].redraw = true;
+            self.dir_state.files[file_index + 1].redraw = true;
+        }
+
+        Ok(())
+    }
+
+    fn enter_dir(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 
