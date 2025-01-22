@@ -47,6 +47,7 @@ pub struct Window {
 }
 
 const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
+const FOOTER_COLOR: Color = Color { red: 0x23, green: 0x34, blue: 0x58 };
 const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
 
 impl Drop for Window {
@@ -85,14 +86,14 @@ impl Window {
         })
     }
 
+    // TODO: only update when button pressed
     pub fn do_interactive(&mut self) -> std::io::Result<()> {
         let mut writer = std::io::stdout();
         ansi::erase(Erase::SCREEN, &mut writer)?;
 
         loop {
-            self.read_current_dir()?;
-            self.print_current_dir(&mut writer)?;
-        
+            self.update(&mut writer)?;
+
             let mut buf = [0; 1];
             if let Err(_) = std::io::stdin().read_exact(&mut buf) {
                continue; 
@@ -199,10 +200,16 @@ impl Window {
             line_index += 1;
         }
         ansi::erase(Erase::CURSOR_TO_END, writer)?;
+        self.print_footer(writer)?;
         self.select_current_line(writer)?;
         writer.flush()?;
 
         Ok(())
+    }
+
+    fn update<W: Writer>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        self.read_current_dir()?;
+        self.print_current_dir(writer)
     }
 
     fn print_header<W: Write>(&self, writer: &mut W, dir_name: &str) -> std::io::Result<()> {
@@ -217,6 +224,22 @@ impl Window {
         let len = dir_name.chars().count() + 2;
         let divider = String::from_iter(std::iter::repeat_n("-", len));
         ansi::set_foreground_color(writer, &divider, &HEADER_COLOR)?;
+        ansi::next_line(writer)?;
+
+        Ok(())
+    }
+
+    fn print_footer<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let footer_start = self.header_reserved + self.num_printable_lines + 1;
+        ansi::set_cursor(CursorPos {x: 1, y: footer_start}, writer)?;
+        
+        let page_text = format!("Page: {}", self.page.y_page);
+        let len = page_text.chars().count() + 2;
+        let divider = String::from_iter(std::iter::repeat('-').take(len));
+        ansi::set_foreground_color(writer, &divider, &FOOTER_COLOR)?;
+        ansi::next_line(writer)?;
+
+        ansi::set_foreground_color(writer, &page_text, &FOOTER_COLOR)?;
         ansi::next_line(writer)?;
 
         Ok(())
