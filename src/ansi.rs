@@ -59,7 +59,7 @@ pub mod ansi {
 
     impl Color {
         pub fn print<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-            set_foreground_color(writer, "█", self)
+            set_foreground_color(writer, "█", *self)
         }
 
         fn to_string(&self) -> String {
@@ -67,7 +67,7 @@ pub mod ansi {
         }
     }
 
-    pub fn set_foreground_color<W: Write>(writer: &mut W, text: &str, color: &Color) -> std::io::Result<()> {
+    pub fn set_foreground_color<W: Write>(writer: &mut W, text: &str, color: Color) -> std::io::Result<()> {
         write!(writer, "{CSI}38;2;{}m{text}{CSI}m", color.to_string())
     }
 
@@ -97,12 +97,18 @@ pub mod ansi {
         write!(writer, "{CSI}1E")
     }
 
-    pub fn make_underline<W: Write>(writer: &mut W) -> std::io::Result<()> {
-        write!(writer, "{CSI}4m")
+    pub enum SGR {
+        Underline,
+        FastBlink
     }
 
-    pub fn make_fast_blinking<W: Write>(writer: &mut W) -> std::io::Result<()> {
-        write!(writer, "{CSI}6m")
+    pub fn set_sgr<W: Write>(mode: SGR, writer: &mut W) -> std::io::Result<()> {
+        let n = match mode {
+            SGR::Underline => 4,
+            SGR::FastBlink => 6
+        };
+        
+        write!(writer, "{CSI}{n}m")
     }
 
     pub fn reset_sgr<W: Write>(writer: &mut W) -> std::io::Result<()> {

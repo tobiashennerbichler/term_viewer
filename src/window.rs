@@ -8,13 +8,13 @@ use std::thread::current;
 
 use termios::{tcgetattr, tcsetattr, Termios, ICANON, ECHO, VMIN, TCSADRAIN};
 use termsize::Size;
-use crate::ansi::ansi::{self, Erase, CursorPos, Color};
+use crate::ansi::ansi::{self, Erase, CursorPos, Color, SGR};
 
 const HEADER_RESERVED: usize = 2;
 const FOOTER_RESERVED: usize = 3;
-const HEADER_COLOR: Color = Color { red: 0xd5, green: 0x98, blue: 0x90 };
-const FOOTER_COLOR: Color = Color { red: 0x23, green: 0x34, blue: 0x58 };
-const ERROR_COLOR:  Color = Color { red: 0xff, green: 0x08, blue: 0x4a };
+const HEADER_COLOR: Color  = Color { red: 0xd5, green: 0x98, blue: 0x90 };
+const FOOTER_COLOR: Color  = Color { red: 0x23, green: 0x34, blue: 0x58 };
+const ERROR_COLOR:  Color  = Color { red: 0xff, green: 0x08, blue: 0x4a };
 const SYMBOLS: [char; 4] = ['📄', '📁', '📂', '➜'];
 
 struct Page {
@@ -44,7 +44,9 @@ struct WindowMetadata {
     term_size: Size,
     printable_start: usize,
     footer_start: usize,
-    num_printable_lines: usize
+    num_printable_lines: usize,
+    header_redraw: bool,
+    footer_redraw: bool
 }
 
 struct DirState {
@@ -70,7 +72,7 @@ impl Drop for Window {
 
 impl Window {
     pub fn new() -> std::io::Result<Self> {
-        let term_size = termsize::get().expect("Could not get terminal size");
+        let term_size = termsize::get().ok_or(Error::other("Could not get terminal size"))?;
         let term_height = term_size.rows as usize;
         let total_reserved = HEADER_RESERVED + FOOTER_RESERVED;
         if term_height <= total_reserved + 1 {
@@ -84,7 +86,9 @@ impl Window {
             term_size,
             printable_start,
             footer_start,
-            num_printable_lines
+            num_printable_lines,
+            header_redraw: true,
+            footer_redraw: true
         };
 
         let path = current_dir()?;
@@ -115,6 +119,11 @@ impl Window {
         self.print_current_dir(&mut writer)?;
 
         loop {
+            self.update_term_size()?;
+            if self.current_page_needs_redraw() {
+                self.print_current_dir(&mut writer)?;
+            }
+
             let Ok(input) = read_input() else {
                 continue;
             };
@@ -127,8 +136,6 @@ impl Window {
                 b'q'  => break,
                 _     => continue
             };
-            self.print_current_dir(&mut writer)?;
-           
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -187,8 +194,9 @@ impl Window {
     //also be mindful about resetting previously selected line
     //TODO: do update_term_size every frame, remove it from read_directory
     //TODO: update broken when resizing down
+    //TODO: handle overflow on x-axis
     fn print_current_dir<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
-        self.print_header(writer, &self.dir_state.name)?;
+        self.print_header(writer)?;
  
         let mut y_pos = self.metadata.printable_start;
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
@@ -201,9 +209,10 @@ impl Window {
             self.print_line(writer, info, y_pos)?;
             y_pos += 1;
         }
-        ansi::erase(Erase::CURSOR_TO_END, writer)?;
+
+        self.clear_screen_to_footer(writer, y_pos)?;
         self.print_footer(writer)?;
-        self.select_current_line(writer)?;
+        self.set_cursor_to_current_line_end(writer)?;
         writer.flush()?;
 
         self.set_entire_page_redraw(self.page.y_page, false);
@@ -211,74 +220,73 @@ impl Window {
     }
     
     fn print_line<W: Write>(&self, writer: &mut W, info: &FileInfo, y_pos: usize) -> std::io::Result<()> {
-        ansi::erase(Erase::LINE, writer)?;
-
         let index = if info.path.is_file() { 0 } else { 1 };
-        print!("{} ", SYMBOLS[index]);
-        let mut text = String::from(&info.file_name);
+        let text = format!("{} ", SYMBOLS[index]);
+        let mut htext = String::from(&info.file_name);
         if info.path.is_symlink() {
-            text.push_str(&format!(" {} {}", SYMBOLS[3], &info.canon_name));
+            htext.push_str(&format!(" {} {}", SYMBOLS[3], &info.canon_name));
         }
-        self.print_highlighted_if(y_pos, &text, writer)?;
-        ansi::next_line(writer)?;
-
+        
+        write_highlight(writer, &text, &htext, y_pos == self.pos.y)?;
         Ok(())
     }
 
-    fn print_header<W: Write>(&self, writer: &mut W, name: &str) -> std::io::Result<()> {
+    fn print_header<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        if !self.metadata.header_redraw {
+            ansi::set_cursor(CursorPos {x: 1, y: self.metadata.printable_start}, writer)?;
+            return Ok(());
+        }
+
         ansi::reset_cursor(writer)?;
 
         // Print directory name
-        let name= format!("{} {}", SYMBOLS[2], name);
-        ansi::set_foreground_color(writer, &name, &HEADER_COLOR)?;
-        ansi::next_line(writer)?;
+        let name= format!("{} {}", SYMBOLS[2], self.dir_state.name);
+        write_line(writer, &name, HEADER_COLOR)?;
 
         // Print divider
         let len = name.chars().count() + 3;
         let divider = String::from_iter(std::iter::repeat_n("-", len));
-        ansi::set_foreground_color(writer, &divider, &HEADER_COLOR)?;
-        ansi::next_line(writer)?;
+        write_line(writer, &divider, HEADER_COLOR)?;
 
+        self.metadata.header_redraw = false;
         Ok(())
     }
 
     fn print_footer<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+        if !self.metadata.footer_redraw {
+            return Ok(());
+        }
+
         ansi::set_cursor(CursorPos {x: 1, y: self.metadata.footer_start}, writer)?;
-        
         let page_text = format!("Page: {}", self.page.y_page);
         let len = page_text.chars().count() + 2;
         let divider = String::from_iter(std::iter::repeat('-').take(len));
-        ansi::set_foreground_color(writer, &divider, &FOOTER_COLOR)?;
-        ansi::next_line(writer)?;
+        write_line(writer, &divider, FOOTER_COLOR)?;
+        write_line(writer, &page_text, FOOTER_COLOR)?;
 
-        ansi::set_foreground_color(writer, &page_text, &FOOTER_COLOR)?;
-        ansi::next_line(writer)?;
-
+        // Keep redraw true so error is cleared
         if let Some(ref error) = self.last_error {
-            ansi::set_foreground_color(writer, error, &ERROR_COLOR)?;
-            ansi::next_line(writer)?;
+            write_line(writer, &error, ERROR_COLOR)?;
             self.last_error = None;
+        } else {
+            ansi::erase(Erase::LINE, writer)?;
+            self.metadata.footer_redraw = false;
         }
 
         Ok(())
     }
     
-    fn print_highlighted_if<W: Write>(&self, y_pos: usize, to_highlight: &str, writer: &mut W) -> std::io::Result<()> {
-        let highlighted = y_pos == self.pos.y;
-        if highlighted {
-            ansi::make_fast_blinking(writer)?;
-            ansi::make_underline(writer)?;
-        }
-        print!("{to_highlight}");
-        
-        if highlighted {
-            ansi::reset_sgr(writer)?;
+    fn clear_screen_to_footer<W: Write>(&self, writer: &mut W, mut y_pos: usize) -> std::io::Result<()> {
+        while y_pos < self.metadata.footer_start {
+            ansi::erase(Erase::LINE, writer)?;
+            ansi::next_line(writer)?;
+            y_pos += 1;
         }
 
         Ok(())
     }
 
-    fn select_current_line<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
+    fn set_cursor_to_current_line_end<W: Write>(&mut self, writer: &mut W) -> std::io::Result<()> {
         let line_index = self.pos_to_line_index(self.pos.y);
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
         let file_index = line_index + entry_offset;
@@ -302,12 +310,12 @@ impl Window {
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
         let file_index = line_index + entry_offset;
         if file_index == 0 {
-            self.last_error = Some(String::from("Error: Cannot move further up"));
+            self.set_error(String::from("Error: Cannot move further up"));
             return Ok(());
         }
 
         if self.pos.y == self.metadata.printable_start {
-            self.page.y_page -= 1;
+            self.set_new_ypage(self.page.y_page - 1);
             self.pos.y = self.metadata.footer_start - 1;
             self.set_entire_page_redraw(self.page.y_page, true);
         } else {
@@ -324,12 +332,12 @@ impl Window {
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
         let file_index = line_index + entry_offset;
         if file_index == self.dir_state.files.len() - 1 {
-            self.last_error = Some(String::from("Error: Cannot move further down"));
+            self.set_error(String::from("Error: Cannot move further down"));
             return Ok(());
         }
 
         if self.pos.y == self.metadata.footer_start - 1 {
-            self.page.y_page += 1;
+            self.set_new_ypage(self.page.y_page + 1);
             self.pos.y = self.metadata.printable_start;
             self.set_entire_page_redraw(self.page.y_page, true);
         } else {
@@ -341,8 +349,26 @@ impl Window {
         Ok(())
     }
 
+    //TODO: set header_redraw
     fn enter_dir(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+
+    fn set_new_ypage(&mut self, new_ypage: usize) {
+        self.page.y_page = new_ypage;
+        self.metadata.footer_redraw = true;
+    }
+
+    fn set_error(&mut self, error: String) {
+        self.last_error = Some(error);
+        self.metadata.footer_redraw = true;
+    }
+
+    fn current_page_needs_redraw(&self) -> bool {
+        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
+
+        self.dir_state.files.iter().skip(entry_offset).take(self.metadata.num_printable_lines).any(|file| file.redraw) |
+        self.metadata.header_redraw | self.metadata.footer_redraw
     }
 
     pub fn setup_termios(&self) -> std::io::Result<()> {
@@ -384,7 +410,7 @@ impl Window {
     }
 
     fn update_term_size(&mut self) -> std::io::Result<()> {
-        let term_size = termsize::get().expect("Could not get terminal size");
+        let term_size = termsize::get().ok_or(Error::other("Could not get terminal size"))?;
         if term_size.cols == self.metadata.term_size.cols &&
            term_size.rows == self.metadata.term_size.rows {
             return Ok(());
@@ -396,24 +422,31 @@ impl Window {
             return Err(Error::other("Terminal not big enough to fit one file"));
         }
         
-        let printable_start = HEADER_RESERVED + 1;
-        let footer_start = HEADER_RESERVED + self.metadata.num_printable_lines + 1;
+        let num_printable_lines = term_height - total_reserved;
+        let footer_start = HEADER_RESERVED + num_printable_lines + 1;
+        let line_index = self.pos_to_line_index(self.pos.y);
+        let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
+        let file_offset = line_index + entry_offset;
 
+        let new_line_index = file_offset % num_printable_lines;
+        let new_y_page = file_offset / num_printable_lines;
+            
         self.metadata.term_size = term_size;
         self.metadata.num_printable_lines = term_height - total_reserved;
-        self.metadata.printable_start = printable_start;
         self.metadata.footer_start = footer_start;
-        self.pos.y = std::cmp::min(self.pos.y, footer_start - 1);
+        self.pos.y = new_line_index + self.metadata.printable_start;
+        self.set_new_ypage(new_y_page);
+        self.set_entire_page_redraw(new_y_page, true);
         Ok(())
     }
 
-    fn pos_to_line_index(&self, y: usize) -> usize {
-        if y < self.metadata.printable_start || y >= self.metadata.footer_start {
+    fn pos_to_line_index(&self, y_pos: usize) -> usize {
+        if y_pos < self.metadata.printable_start || y_pos >= self.metadata.footer_start {
             panic!("CursorPosition Y out of bound");
         }
         
-        y - self.metadata.printable_start
-    }  
+        y_pos - self.metadata.printable_start
+    }
 }
 
 fn read_input() -> std::io::Result<u8> {
@@ -437,4 +470,29 @@ fn get_termios() -> std::io::Result<Termios> {
     }
 
     Ok(termios)
+}
+
+fn write_line<W: Write>(writer: &mut W, text: &str, color: Color) -> std::io::Result<()> {
+    ansi::erase(Erase::LINE, writer)?;
+    ansi::set_foreground_color(writer, text, color)?;
+    ansi::next_line(writer)?;
+
+    Ok(())
+}
+
+fn write_highlight<W: Write>(writer: &mut W, pretext: &str, htext: &str, highlight: bool) -> std::io::Result<()> {
+    ansi::erase(Erase::LINE, writer)?;
+    write!(writer, "{}", pretext)?;
+
+    if highlight {
+        ansi::set_sgr(SGR::FastBlink, writer)?;
+        ansi::set_sgr(SGR::Underline, writer)?;
+    }
+    write!(writer, "{}", htext);
+    if highlight {
+        ansi::reset_sgr(writer)?;
+    }
+
+    ansi::next_line(writer)?;
+    Ok(())
 }
