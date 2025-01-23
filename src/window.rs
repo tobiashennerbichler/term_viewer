@@ -264,15 +264,13 @@ impl Window {
         write_line(writer, &divider, FOOTER_COLOR)?;
         write_line(writer, &page_text, FOOTER_COLOR)?;
 
-        // Keep redraw true so error is cleared
         if let Some(ref error) = self.last_error {
             write_line(writer, &error, ERROR_COLOR)?;
-            self.last_error = None;
         } else {
             ansi::erase(Erase::LINE, writer)?;
-            self.metadata.footer_redraw = false;
         }
 
+        self.metadata.footer_redraw = false;
         Ok(())
     }
     
@@ -324,6 +322,7 @@ impl Window {
             self.dir_state.files[file_index - 1].redraw = true;
         }
 
+        self.clear_error();
         Ok(())
     }
     
@@ -346,6 +345,7 @@ impl Window {
             self.dir_state.files[file_index + 1].redraw = true;
         }
 
+        self.clear_error();
         Ok(())
     }
 
@@ -362,6 +362,13 @@ impl Window {
     fn set_error(&mut self, error: String) {
         self.last_error = Some(error);
         self.metadata.footer_redraw = true;
+    }
+
+    fn clear_error(&mut self) {
+        if self.last_error.is_some() {
+            self.last_error = None;
+            self.metadata.footer_redraw = true;
+        }
     }
 
     fn current_page_needs_redraw(&self) -> bool {
@@ -427,13 +434,15 @@ impl Window {
         let line_index = self.pos_to_line_index(self.pos.y);
         let entry_offset = self.page.y_page * self.metadata.num_printable_lines;
         let file_offset = line_index + entry_offset;
-
+        
         let new_line_index = file_offset % num_printable_lines;
         let new_y_page = file_offset / num_printable_lines;
             
         self.metadata.term_size = term_size;
         self.metadata.num_printable_lines = term_height - total_reserved;
         self.metadata.footer_start = footer_start;
+        self.metadata.header_redraw = true;
+
         self.pos.y = new_line_index + self.metadata.printable_start;
         self.set_new_ypage(new_y_page);
         self.set_entire_page_redraw(new_y_page, true);
@@ -488,7 +497,7 @@ fn write_highlight<W: Write>(writer: &mut W, pretext: &str, htext: &str, highlig
         ansi::set_sgr(SGR::FastBlink, writer)?;
         ansi::set_sgr(SGR::Underline, writer)?;
     }
-    write!(writer, "{}", htext);
+    write!(writer, "{}", htext)?;
     if highlight {
         ansi::reset_sgr(writer)?;
     }
