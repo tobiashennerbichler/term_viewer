@@ -2,7 +2,7 @@
 
 ## Information
 
-Application written in Rust that allows displaying of Windows Bitmap images directly in the Terminal. Provides support for all possible bpp values (1, 4, 8, 16, 24, 32) but does not support compressed images. Also supports displaying multiple Windows Bitmap files that are in the same folder in a row to implement some basic "animations". Resolution of the image is dependent on the terminal size.
+Application written in Rust that allows the drawing of Windows Bitmap images directly in the Terminal. The resolution of the displayed image is dependent on the size of the terminal (see examples below). Implements a Windows Bitmap file parser with support for all possible bpp values (1, 4, 8, 16, 24, 32) but does not support compressed images. Also supports displaying multiple Windows Bitmap files that are in the same folder in a row to implement some basic "animations".
 
 ### TODOS:
 - gif support
